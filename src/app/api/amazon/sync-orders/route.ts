@@ -20,7 +20,7 @@ import { log } from "@/lib/logger";
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { clientId, clientSecret, refreshToken, region, sandbox, userId: bodyUserId, lastUpdatedAfter } = body;
+    const { clientId, clientSecret, refreshToken, region, sandbox, userId: bodyUserId, lastUpdatedAfter, fullRebuild = false } = body;
 
     // Authenticate: JWT in production, body userId in development
     const { userId, supabaseAdmin } = await authenticateWithDevFallback(request, bodyUserId);
@@ -41,9 +41,13 @@ export async function POST(request: Request) {
     };
 
     // Determine delta sync boundary:
+    // If fullRebuild is true, sync historical orders from 365 days ago.
     // If lastUpdatedAfter is not provided, check the most recent order in the DB
     let syncAfter = lastUpdatedAfter;
-    if (!syncAfter) {
+    if (fullRebuild) {
+      syncAfter = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString();
+      log.info(`[SyncOrdersRoute] Full account rebuild requested. Syncing from: ${syncAfter}`);
+    } else if (!syncAfter) {
       const { data: latestOrder } = await supabaseAdmin
         .from("orders")
         .select("last_update_date")

@@ -314,7 +314,8 @@ export const useAnalyticsStore = create<AnalyticsStore>((set, get) => {
               misc_cost
             )
           `)
-          .eq("user_id", userId);
+          .eq("user_id", userId)
+          .eq("status", "active");
 
         if (listDb && listDb.length > 0) {
           const mappedInventory: InventoryItem[] = listDb.map((l: any) => {

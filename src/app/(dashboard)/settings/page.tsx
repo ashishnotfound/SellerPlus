@@ -420,9 +420,9 @@ export default function SettingsPage() {
     }
   };
 
-  const startAmazonSync = async (e: React.FormEvent) => {
-    e.preventDefault();
-    console.log("[SP-API Sync] startAmazonSync triggered!");
+  const startAmazonSync = async (e: React.FormEvent | null, isFullRebuild = false) => {
+    if (e) e.preventDefault();
+    console.log("[SP-API Sync] startAmazonSync triggered! Full Rebuild:", isFullRebuild);
     
     // Validate empty credentials in production mode
     if ((!clientIdInput.trim() || !clientSecretInput.trim()) && !sandboxInput) {
@@ -608,7 +608,8 @@ export default function SettingsPage() {
               refreshToken: refreshTokenInput,
               region: marketplaceInput,
               sandbox: sandboxInput,
-              userId: user.id
+              userId: user.id,
+              fullRebuild: isFullRebuild
             })
           });
           const ordersData = await ordersRes.json();
@@ -1297,28 +1298,40 @@ export default function SettingsPage() {
                   />
                 </div>
 
-                <div className="flex items-center gap-2 mt-2">
-                  <button
-                    type="button"
-                    onClick={() => setShowAmazonModal(false)}
-                    className="flex-1 h-10 rounded-xl border border-white/10 hover:bg-white/5 text-xs text-zinc-300 font-bold"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={testOrdersApi}
-                    disabled={isTestingOrders}
-                    className="flex-1 h-10 rounded-xl bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 border border-purple-500/30 font-bold text-xs disabled:opacity-50 transition-colors"
-                  >
-                    {isTestingOrders ? "Testing..." : "Test Orders API"}
-                  </button>
-                  <button
-                    type="submit"
-                    className="flex-1 h-10 rounded-xl bg-orange-500 hover:bg-orange-600 text-black font-bold text-xs"
-                  >
-                    Authorize & Sync
-                  </button>
+                <div className="flex flex-col gap-2 mt-4">
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => startAmazonSync(null, false)}
+                      className="flex-1 h-10 rounded-xl bg-indigo-500 hover:bg-indigo-600 text-white font-bold text-xs transition-colors"
+                    >
+                      🔄 Incremental Sync
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => startAmazonSync(null, true)}
+                      className="flex-1 h-10 rounded-xl bg-orange-500 hover:bg-orange-600 text-black font-bold text-xs transition-colors"
+                    >
+                      🔁 Full Rebuild Sync
+                    </button>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowAmazonModal(false)}
+                      className="flex-1 h-10 rounded-xl border border-white/10 hover:bg-white/5 text-xs text-zinc-300 font-bold"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={testOrdersApi}
+                      disabled={isTestingOrders}
+                      className="flex-1 h-10 rounded-xl bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 border border-purple-500/30 font-bold text-xs disabled:opacity-50 transition-colors"
+                    >
+                      {isTestingOrders ? "Testing..." : "Test Orders API"}
+                    </button>
+                  </div>
                 </div>
                 {testOrdersResponse && (
                   <div className="mt-4 p-4 rounded-xl border border-white/10 bg-[#0A0A0C] overflow-auto max-h-96">

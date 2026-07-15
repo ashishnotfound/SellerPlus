@@ -118,7 +118,7 @@ export class BIRepository {
 
   /**
    * Fetches inventory summary.
-   * Only selects quantity and status columns — no full row fetch.
+   * Only selects available_qty and status columns from listings — no full row fetch.
    */
   static async getInventorySummary(userId: string): Promise<InventorySummary> {
     if (!userId) throw new Error("BIRepository.getInventorySummary: userId is required");
@@ -126,8 +126,8 @@ export class BIRepository {
     const adminClient = getAdminClient();
 
     const { data, error } = await adminClient
-      .from("inventory")
-      .select("quantity, status")
+      .from("listings")
+      .select("available_qty, status")
       .eq("user_id", userId);
 
     if (error) throw new Error(`BIRepository.getInventorySummary failed: ${error.message}`);
@@ -135,15 +135,18 @@ export class BIRepository {
     const items = data || [];
     let lowStockItems = 0;
     let outOfStockItems = 0;
+    let activeItemsCount = 0;
 
     for (const i of items) {
-      const qty = Number(i.quantity) || 0;
+      if (i.status !== "active") continue;
+      activeItemsCount++;
+      const qty = Number(i.available_qty) || 0;
       if (qty === 0) outOfStockItems++;
       else if (qty < 20) lowStockItems++;
     }
 
     return {
-      totalItems: items.length,
+      totalItems: activeItemsCount,
       lowStockItems,
       outOfStockItems,
     };

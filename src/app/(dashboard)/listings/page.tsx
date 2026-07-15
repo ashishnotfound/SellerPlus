@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 import { 
   Search, Filter, Grid, List, Plus, Settings, ChevronRight, X, Trash2, Edit3, History, 
   Tag, Download, FileJson, Printer, Check, CheckSquare, Square, AlertCircle, AlertTriangle,
-  Award, Flame, TrendingUp, TrendingDown, RefreshCw, Layers, Sparkles, Image, CheckCircle, Save
+  Award, Flame, TrendingUp, TrendingDown, RefreshCw, Layers, Sparkles, Image, CheckCircle, Save, Loader2
 } from "lucide-react";
 
 export default function ListingsPage() {
@@ -80,6 +80,10 @@ export default function ListingsPage() {
   const [bulkInventoryQty, setBulkInventoryQty] = useState(50);
   const [bulkKeywordsInput, setBulkKeywordsInput] = useState("");
   const [bulkStatusSelect, setBulkStatusSelect] = useState<ListingStatus>("active");
+
+  // AI draft copywriting & publishing states
+  const [isGeneratingCopy, setIsGeneratingCopy] = useState(false);
+  const [isPublishing, setIsPublishing] = useState(false);
 
   useEffect(() => {
     if (globalThresholds) {
@@ -164,6 +168,59 @@ export default function ListingsPage() {
     await updateListing(editingListing.id, editingListing, changeSummary || "Listing updated");
     setEditingListing(null);
     setChangeSummary("");
+  };
+
+  const handleAiGenerateCopy = async () => {
+    if (!editingListing) return;
+    setIsGeneratingCopy(true);
+    try {
+      const response = await fetch("/api/ai/create-listing-draft", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          productName: editingListing.title,
+          existingListingId: editingListing.id,
+        })
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to start AI generation");
+      }
+      useToastStore.getState().success("AI Copy Generation Started", "Draft generation is running in the background. Refresh in a few moments to review details.");
+      
+      setTimeout(() => {
+        if (user?.id) loadListings(user.id);
+      }, 5000);
+    } catch (err: any) {
+      useToastStore.getState().error("Generation Failed", err.message);
+    } finally {
+      setIsGeneratingCopy(false);
+    }
+  };
+
+  const handlePublishDraft = async () => {
+    if (!editingListing) return;
+    setIsPublishing(true);
+    try {
+      const response = await fetch("/api/ai/publish-listing-draft", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          listingId: editingListing.id,
+        })
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to publish listing draft");
+      }
+      useToastStore.getState().success("Listing Published", "The draft has been snapshot and published successfully!");
+      if (user?.id) loadListings(user.id);
+      setEditingListing(null);
+    } catch (err: any) {
+      useToastStore.getState().error("Publish Failed", err.message);
+    } finally {
+      setIsPublishing(false);
+    }
   };
 
   const handleCreateListing = async () => {
@@ -1230,6 +1287,56 @@ export default function ListingsPage() {
 
               {editorTab === "content" && (
                 <div className="space-y-4">
+                  {/* AI Copywriting Assistant Section */}
+                  <div className="p-4 rounded-xl border border-indigo-500/20 bg-indigo-500/5 flex items-center justify-between gap-4">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 bg-indigo-500/10 rounded-lg border border-indigo-500/20 text-indigo-400">
+                        <Sparkles className="w-4 h-4 animate-pulse" />
+                      </div>
+                      <div>
+                        <h4 className="text-xs font-bold text-white">AI Copywriting Assistant</h4>
+                        <p className="text-[10px] text-zinc-400">Generate high-converting SEO optimized copy or publish drafts.</p>
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={handleAiGenerateCopy}
+                        disabled={isGeneratingCopy}
+                        className="h-8 px-3 rounded-lg bg-indigo-500 hover:bg-indigo-600 text-white font-bold text-[10px] flex items-center gap-1.5 transition-all disabled:opacity-50"
+                      >
+                        {isGeneratingCopy ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" /> Generating...
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles className="w-3.5 h-3.5" /> Generate Draft
+                          </>
+                        )}
+                      </button>
+
+                      {editingListing.status === "draft" && (
+                        <button
+                          type="button"
+                          onClick={handlePublishDraft}
+                          disabled={isPublishing}
+                          className="h-8 px-3 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-[10px] flex items-center gap-1.5 transition-all disabled:opacity-50"
+                        >
+                          {isPublishing ? (
+                            <>
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" /> Publishing...
+                            </>
+                          ) : (
+                            <>
+                              <CheckCircle className="w-3.5 h-3.5" /> Publish Draft
+                            </>
+                          )}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
                   <div>
                     <label className="text-[10px] uppercase font-bold text-zinc-500">Listing Product Title</label>
                     <textarea 

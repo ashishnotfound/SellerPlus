@@ -23,9 +23,33 @@ export async function GET(request: Request) {
       return NextResponse.json({ success: true, message: "No low-stock items found." });
     }
 
+    // Fetch active listings to filter out deleted/inactive listings
+    const { data: activeListings, error: listingsErr } = await supabaseAdmin
+      .from("listings")
+      .select("user_id, sku")
+      .eq("status", "active");
+
+    if (listingsErr) {
+      throw new Error(`Failed to query active listings: ${listingsErr.message}`);
+    }
+
+    // Set of active user_id:sku combinations
+    const activeSkusSet = new Set(
+      (activeListings || []).map((l) => `${l.user_id}:${l.sku}`)
+    );
+
+    // Keep only active items
+    const filteredLowStockItems = lowStockItems.filter(
+      (item) => activeSkusSet.has(`${item.user_id}:${item.sku}`)
+    );
+
+    if (filteredLowStockItems.length === 0) {
+      return NextResponse.json({ success: true, message: "No active low-stock items found." });
+    }
+
     // 2. Group items by user_id
-    const userAlertsMap = new Map<string, typeof lowStockItems>();
-    lowStockItems.forEach((item) => {
+    const userAlertsMap = new Map<string, typeof filteredLowStockItems>();
+    filteredLowStockItems.forEach((item) => {
       const list = userAlertsMap.get(item.user_id) || [];
       list.push(item);
       userAlertsMap.set(item.user_id, list);
