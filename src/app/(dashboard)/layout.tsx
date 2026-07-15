@@ -45,16 +45,17 @@ export default function DashboardLayout({
   useEffect(() => {
     checkSession();
     loadSubscription();
-    loadConnections();
-  }, [checkSession, loadSubscription, loadConnections]);
+  }, [checkSession, loadSubscription]);
 
   useEffect(() => {
     if (user?.id) {
+      loadConnections(user.id);
       loadAnalyticsData(user.id);
       loadListings(user.id);
       loadGoals(user.id);
     }
-  }, [user?.id, loadAnalyticsData, loadListings, loadGoals]);
+  }, [user?.id, loadConnections, loadAnalyticsData, loadListings, loadGoals]);
+
 
   useEffect(() => {
     if (!loading && !user) {

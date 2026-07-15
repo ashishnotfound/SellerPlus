@@ -106,12 +106,27 @@ export class RecommendationOptimizer {
   /**
    * Stage 4: Assign Deterministic Confidence
    * Overrides LLM confidence scores using KPIService statistical rules.
+   * Uses real data richness from context — not hardcoded constants.
    */
   private static assignDeterministicConfidence(recs: ExplainableRecommendation[], context: any): ExplainableRecommendation[] {
-    // Assuming context provides data richness metrics
-    const dataPoints = context?.dataSummaries?.orders?.totalOrders > 0 ? 50 : 2;
-    const missing = 0;
-    const ageDays = 1;
+    // FIX: Derive real data richness from the context payload
+    const totalOrders = context?.dataSummaries?.orders?.totalOrders ?? 0;
+    const campaignCount = context?.dataSummaries?.ads?.campaignCount ?? 0;
+    const totalItems = context?.dataSummaries?.inventory?.totalItems ?? 0;
+    const listingsWithCostProfile = context?.dataSummaries?.cogs?.listingsWithCostProfile ?? 0;
+
+    // Data points = total observable business events
+    const dataPoints = totalOrders + campaignCount + totalItems;
+
+    // Missing fields: count key areas with no data
+    let missing = 0;
+    if (totalOrders === 0) missing++;
+    if (campaignCount === 0) missing++;
+    if (totalItems === 0) missing++;
+    if (listingsWithCostProfile === 0) missing++; // No COGS linked — profit calc incomplete
+
+    // Data age: use today as approximation (orders are fetched fresh on each analysis)
+    const ageDays = 0;
 
     const baseConfidence = KPIService.calculateConfidenceScore(dataPoints, missing, ageDays, 0.1);
 
@@ -119,7 +134,11 @@ export class RecommendationOptimizer {
       // Lower confidence for High Risk actions
       const riskPenalty = r.riskLevel === "High" ? 20 : r.riskLevel === "Medium" ? 10 : 0;
       r.confidence = Math.min(100, Math.max(0, baseConfidence - riskPenalty));
-      r.confidenceReason = `Deterministic calculation based on ${dataPoints} data points and ${r.riskLevel} risk level penalty.`;
+
+      const dataDescription = dataPoints > 0
+        ? `${dataPoints} data points (${totalOrders} orders, ${campaignCount} campaigns, ${totalItems} listings)`
+        : "insufficient data";
+      r.confidenceReason = `Calculated from ${dataDescription}. Missing data penalties: ${missing}. Risk adjustment: -${riskPenalty}.`;
       return r;
     });
   }

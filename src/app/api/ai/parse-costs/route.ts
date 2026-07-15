@@ -34,7 +34,7 @@ export async function POST(request: Request) {
     const skuList = listings?.map(l => `${l.sku} (${l.title})`).join("\n") || "No SKUs available.";
 
     // 2. Query Gemini to parse the natural language input
-    const model = genAI.getGenerativeModel({ model: "gemini-3.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-lite" });
     const prompt = `
       You are an expert ERP cost accounting parser.
       Analyze this user request and extract specific SKU pricing or cost updates.
@@ -168,3 +168,4 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
+

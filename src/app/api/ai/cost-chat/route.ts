@@ -26,7 +26,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const model = genAI.getGenerativeModel({ model: "gemini-3.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-lite" });
 
     // Build context about current profiles and listings
     const profilesCtx = profiles?.map((p: any) => 
@@ -137,3 +137,4 @@ Output ONLY a raw JSON object matching this schema. No markdown backticks, no wr
     return NextResponse.json({ error: error.message || "An unexpected error occurred." }, { status: 500 });
   }
 }
+

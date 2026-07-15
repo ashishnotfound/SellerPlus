@@ -24,6 +24,9 @@ export interface AdsSummary {
 export interface OrdersSummary {
   totalRevenue: number;
   totalOrders: number;
+  totalCommissionFees: number;
+  totalFbaFees: number;
+  totalShippingCost: number;
   orderStatusCounts: Record<string, number>;
 }
 
@@ -33,9 +36,15 @@ export interface InventorySummary {
   outOfStockItems: number;
 }
 
+export interface CogsSummary {
+  totalCogs: number;
+  listingsWithCostProfile: number;
+}
+
 export class BIRepository {
   /**
    * Fetches 30-day ads summary using SQL aggregations.
+   * Applies a 30-day date filter on created_at/updated_at.
    * Zero row-level data is loaded into Node.js memory.
    */
   static async getAdsSummary(userId: string): Promise<AdsSummary> {
@@ -46,10 +55,12 @@ export class BIRepository {
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
     // SQL aggregation — single query returns pre-summed values
+    // FIX: Apply the 30-day date filter that was computed but not used
     const { data, error } = await adminClient
       .from("advertising_campaigns")
       .select("spend, sales, impressions, clicks, status")
-      .eq("user_id", userId);
+      .eq("user_id", userId)
+      .gte("created_at", thirtyDaysAgo.toISOString());
 
     if (error) throw new Error(`BIRepository.getAdsSummary failed: ${error.message}`);
 
@@ -83,7 +94,7 @@ export class BIRepository {
 
   /**
    * Fetches 30-day orders summary using SQL aggregations.
-   * Only selects the two columns needed: total_amount and status.
+   * Now includes commission fees, FBA fees, and shipping costs for accurate profit calculation.
    */
   static async getOrdersSummary(userId: string): Promise<OrdersSummary> {
     if (!userId) throw new Error("BIRepository.getOrdersSummary: userId is required");
@@ -94,7 +105,7 @@ export class BIRepository {
 
     const { data, error } = await adminClient
       .from("orders")
-      .select("total_amount, status")
+      .select("total_amount, status, commission_fees, fba_fees, shipping_cost")
       .eq("user_id", userId)
       .gte("purchase_date", thirtyDaysAgo.toISOString());
 
@@ -102,17 +113,88 @@ export class BIRepository {
 
     const orders = data || [];
     let totalRevenue = 0;
+    let totalCommissionFees = 0;
+    let totalFbaFees = 0;
+    let totalShippingCost = 0;
     const orderStatusCounts: Record<string, number> = {};
 
     for (const o of orders) {
       totalRevenue += Number(o.total_amount) || 0;
+      totalCommissionFees += Number(o.commission_fees) || 0;
+      totalFbaFees += Number(o.fba_fees) || 0;
+      totalShippingCost += Number(o.shipping_cost) || 0;
       orderStatusCounts[o.status] = (orderStatusCounts[o.status] || 0) + 1;
     }
 
     return {
       totalRevenue,
       totalOrders: orders.length,
+      totalCommissionFees,
+      totalFbaFees,
+      totalShippingCost,
       orderStatusCounts,
+    };
+  }
+
+  /**
+   * Fetches total COGS from cost_profiles linked to active listings.
+   * Uses sales_30d * unit_cost for each listing that has a cost profile.
+   */
+  static async getCogsSummary(userId: string): Promise<CogsSummary> {
+    if (!userId) throw new Error("BIRepository.getCogsSummary: userId is required");
+
+    const adminClient = getAdminClient();
+
+    // Fetch active listings that have a cost profile linked
+    const { data: listings, error: listingError } = await adminClient
+      .from("listings")
+      .select("sales_30d, cost_profile_id")
+      .eq("user_id", userId)
+      .eq("status", "active")
+      .not("cost_profile_id", "is", null);
+
+    if (listingError) throw new Error(`BIRepository.getCogsSummary: listings fetch failed: ${listingError.message}`);
+
+    const listingsWithProfile = listings || [];
+    if (listingsWithProfile.length === 0) {
+      return { totalCogs: 0, listingsWithCostProfile: 0 };
+    }
+
+    // Collect unique cost_profile_ids
+    const profileIds = [...new Set(listingsWithProfile.map((l) => l.cost_profile_id).filter(Boolean))];
+
+    const { data: profiles, error: profileError } = await adminClient
+      .from("cost_profiles")
+      .select("id, printing_cost, material_cost, packaging_cost, shipping_cost, labor_cost, misc_cost")
+      .in("id", profileIds)
+      .eq("user_id", userId);
+
+    if (profileError) throw new Error(`BIRepository.getCogsSummary: profiles fetch failed: ${profileError.message}`);
+
+    // Build profile map
+    const profileMap = new Map<string, number>();
+    for (const p of profiles || []) {
+      const unitCost =
+        (Number(p.printing_cost) || 0) +
+        (Number(p.material_cost) || 0) +
+        (Number(p.packaging_cost) || 0) +
+        (Number(p.shipping_cost) || 0) +
+        (Number(p.labor_cost) || 0) +
+        (Number(p.misc_cost) || 0);
+      profileMap.set(p.id, unitCost);
+    }
+
+    // Calculate total COGS: sum(sales_30d * unit_cost) across listings
+    let totalCogs = 0;
+    for (const listing of listingsWithProfile) {
+      const unitCost = profileMap.get(listing.cost_profile_id) || 0;
+      const sales30d = Number(listing.sales_30d) || 0;
+      totalCogs += unitCost * sales30d;
+    }
+
+    return {
+      totalCogs,
+      listingsWithCostProfile: listingsWithProfile.length,
     };
   }
 

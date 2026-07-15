@@ -17,17 +17,27 @@ export class BIEngine {
   ): Promise<BIResponse> {
     
     // 1. Gather raw data from Repositories Concurrently
-    const [adsSummary, ordersSummary, inventorySummary] = await Promise.all([
+    const [adsSummary, ordersSummary, inventorySummary, cogsSummary] = await Promise.all([
       BIRepository.getAdsSummary(userId),
       BIRepository.getOrdersSummary(userId),
-      BIRepository.getInventorySummary(userId)
+      BIRepository.getInventorySummary(userId),
+      BIRepository.getCogsSummary(userId),
     ]);
     
     // 2. Calculate verified KPIs using KPIService (NO LLM MATH ALLOWED)
     const acos = KPIService.calculateACOS(adsSummary.totalSpend, adsSummary.totalSales);
     const roas = KPIService.calculateROAS(adsSummary.totalSpend, adsSummary.totalSales);
     const tacos = KPIService.calculateTACOS(adsSummary.totalSpend, ordersSummary.totalRevenue);
-    const profit = KPIService.calculateProfit(ordersSummary.totalRevenue, 0, 0, adsSummary.totalSpend, 0); // Simplified for prototype
+
+    // FIX: Use real COGS from cost_profiles and real Amazon fees from orders
+    const totalFees = ordersSummary.totalCommissionFees + ordersSummary.totalFbaFees + ordersSummary.totalShippingCost;
+    const profit = KPIService.calculateProfit(
+      ordersSummary.totalRevenue,
+      cogsSummary.totalCogs,
+      totalFees,
+      adsSummary.totalSpend,
+      0
+    );
     const margin = KPIService.calculateMargin(profit, ordersSummary.totalRevenue);
 
     // 3. Prepare Context Payload
@@ -43,9 +53,17 @@ export class BIEngine {
       dataSummaries: {
         ads: adsSummary,
         orders: ordersSummary,
-        inventory: inventorySummary
+        inventory: inventorySummary,
+        cogs: cogsSummary,
+        fees: {
+          totalCommissionFees: ordersSummary.totalCommissionFees,
+          totalFbaFees: ordersSummary.totalFbaFees,
+          totalShippingCost: ordersSummary.totalShippingCost,
+          totalFees,
+        }
       }
     };
+
 
     // 4. Construct System Prompt
     const systemPrompt = `

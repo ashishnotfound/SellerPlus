@@ -260,6 +260,7 @@ export default function SettingsPage() {
   const shopifyConnected = useConnections((s) => s.shopifyConnected);
   const amazonSellerId = useConnections((s) => s.amazonSellerId);
   const amazonMarketplace = useConnections((s) => s.amazonMarketplace);
+  const amazonConnection = useConnections((s) => s.amazonConnection);
   const connectAmazon = useConnections((s) => s.connectAmazon);
   const disconnectAmazon = useConnections((s) => s.disconnectAmazon);
   const connectFlipkart = useConnections((s) => s.connectFlipkart);
@@ -274,12 +275,32 @@ export default function SettingsPage() {
 
   // Amazon Modal state
   const [showAmazonModal, setShowAmazonModal] = useState(false);
-  const [sellerIdInput, setSellerIdInput] = useState(amazonSellerId || "A39XYZ12345678");
+  const [sellerIdInput, setSellerIdInput] = useState(amazonSellerId || "");
   const [marketplaceInput, setMarketplaceInput] = useState(amazonMarketplace || "India (amazon.in)");
   const [clientIdInput, setClientIdInput] = useState("");
   const [clientSecretInput, setClientSecretInput] = useState("");
   const [refreshTokenInput, setRefreshTokenInput] = useState("");
   const [sandboxInput, setSandboxInput] = useState(false);
+
+  // Pre-fill modal with saved credentials when available
+  const openAmazonModal = () => {
+    if (amazonConnection) {
+      setSellerIdInput(amazonConnection.seller_id || "");
+      setMarketplaceInput(amazonConnection.marketplace || "India (amazon.in)");
+      setClientIdInput(amazonConnection.client_id || "");
+      setClientSecretInput(amazonConnection.client_secret || "");
+      setRefreshTokenInput(amazonConnection.refresh_token || "");
+      setSandboxInput(amazonConnection.is_sandbox || false);
+    } else {
+      setSellerIdInput(amazonSellerId || "");
+      setMarketplaceInput(amazonMarketplace || "India (amazon.in)");
+      setClientIdInput("");
+      setClientSecretInput("");
+      setRefreshTokenInput("");
+      setSandboxInput(false);
+    }
+    setShowAmazonModal(true);
+  };
   
   // Sync wizard stages
   const [syncStatus, setSyncStatus] = useState<"idle" | "oauth" | "scope" | "inventory" | "orders" | "done">("idle");
@@ -593,9 +614,20 @@ export default function SettingsPage() {
 
       const ok = await saveListingsToSupabase(realListings);
       if (ok) {
-        // Removed insecure localStorage storage of sensitive amazon credentials.
+        // Step 5: Persist Amazon connection to Supabase (replaces localStorage)
+        if (user?.id) {
+          await connectAmazon(
+            user.id,
+            sellerIdInput,
+            marketplaceInput,
+            clientIdInput,
+            clientSecretInput,
+            refreshTokenInput,
+            sandboxInput
+          );
+        }
 
-        // Step 5: Sync Amazon Orders
+        // Step 6: Sync Amazon Orders
         setSyncStatus("orders" as any);
         setSyncProgress(95);
 
@@ -625,7 +657,6 @@ export default function SettingsPage() {
         await new Promise((resolve) => setTimeout(resolve, 800));
 
         useToastStore.getState().success("Sync Complete", `Successfully connected to Selling Partner API! Synced ${realListings.length} active listings and imported your order history.`);
-        connectAmazon(sellerIdInput, marketplaceInput);
         setShowAmazonModal(false);
         window.location.href = "/dashboard";
       }
@@ -937,13 +968,13 @@ export default function SettingsPage() {
                     <span className="text-[10px] uppercase font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
                       Connected
                     </span>
-                    <button onClick={disconnectAmazon} className="text-[10px] text-zinc-500 hover:text-zinc-300">
+                    <button onClick={() => user?.id && disconnectAmazon(user.id)} className="text-[10px] text-zinc-500 hover:text-zinc-300">
                       Disconnect
                     </button>
                   </div>
                 ) : (
                   <button
-                    onClick={() => setShowAmazonModal(true)}
+                    onClick={openAmazonModal}
                     className="px-2.5 py-1 rounded bg-indigo-500 hover:bg-indigo-600 text-[10px] text-white font-bold transition-all"
                   >
                     Authenticate
@@ -1449,14 +1480,19 @@ export default function SettingsPage() {
                       if (itemsFetched.length > 0) {
                         const ok = await saveListingsToSupabase(itemsFetched);
                         if (ok) {
-                          if (typeof window !== "undefined") {
-                            if (refreshTokenInput.trim()) localStorage.setItem("sp_amazon_refresh_token", refreshTokenInput);
-                            if (clientIdInput.trim()) localStorage.setItem("sp_amazon_client_id", clientIdInput);
-                            if (clientSecretInput.trim()) localStorage.setItem("sp_amazon_client_secret", clientSecretInput);
-                            localStorage.setItem("sp_amazon_sandbox", String(sandboxInput));
+                          // Persist credentials to Supabase (not localStorage)
+                          if (user?.id) {
+                            await connectAmazon(
+                              user.id,
+                              sellerIdInput,
+                              marketplaceInput,
+                              clientIdInput,
+                              clientSecretInput,
+                              refreshTokenInput,
+                              sandboxInput
+                            );
                           }
                           useToastStore.getState().success("Catalog Synced", `Successfully loaded ${itemsFetched.length} catalog items manually!`);
-                          connectAmazon(sellerIdInput, marketplaceInput);
                           setShowAmazonModal(false);
                           window.location.href = "/dashboard";
                         }

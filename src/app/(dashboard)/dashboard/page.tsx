@@ -106,7 +106,7 @@ function DashboardError({ onRetry }: { onRetry: () => void }) {
 
 // ─── Dashboard Empty State ────────────────────────────────────────────
 
-function DashboardEmpty({ onRefresh }: { onRefresh: () => void }) {
+function DashboardEmpty({ onRefresh, amazonConnected }: { onRefresh: () => void, amazonConnected: boolean }) {
   return (
     <div className="flex flex-col gap-8">
       <PageHeader
@@ -115,7 +115,7 @@ function DashboardEmpty({ onRefresh }: { onRefresh: () => void }) {
       />
       <OnboardingBanner
         steps={{
-          amazonConnected: false,
+          amazonConnected,
           costProfileAdded: false,
           aiChatUsed: false,
         }}
@@ -174,7 +174,7 @@ export default function DashboardPage() {
   if (isLoading || isRefetching) return <DashboardSkeleton />;
   if (isError) return <DashboardError onRetry={refetch} />;
   if (!biData || (biData.widgets.length === 0 && biData.recommendations.length === 0)) {
-    return <DashboardEmpty onRefresh={refetch} />;
+    return <DashboardEmpty onRefresh={refetch} amazonConnected={amazonConnected} />;
   }
 
   const kpiWidgets = biData.widgets.filter((w) => w.type === "KPI");

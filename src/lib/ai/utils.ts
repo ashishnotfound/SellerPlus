@@ -37,7 +37,7 @@ const genAI = apiKey ? new GoogleGenerativeAI(apiKey) : null;
  * Returns a Gemini GenerativeModel instance.
  * @throws Error if GEMINI_API_KEY is not configured
  */
-export function getModel(modelName: string = "gemini-3.5-flash"): GenerativeModel {
+export function getModel(modelName: string = "gemini-2.0-flash-lite"): GenerativeModel {
   if (!genAI) {
     throw new Error("Gemini API key is not configured.");
   }
@@ -295,7 +295,7 @@ export async function routeLLMRequest(
       eligibleProviders = [{
         provider: "gemini",
         api_key: defaultKey,
-        model_name: "gemini-3.5-flash",
+        model_name: "gemini-2.0-flash-lite",
         priority: 1,
         is_enabled: true
       }];
@@ -465,10 +465,11 @@ async function callFallbackGemini(prompt: string, options?: GenerationOptions): 
   const fallbackSetting: LLMSetting = {
     provider: "gemini",
     api_key: defaultKey,
-    model_name: "gemini-3.5-flash",
+    model_name: "gemini-2.0-flash-lite",
     priority: 1,
     is_enabled: true
   };
   const adapter = getAdapterForSetting(fallbackSetting);
   return adapter.generateText(prompt, options);
 }
+

@@ -158,7 +158,7 @@ export async function POST(request: Request) {
     // Execute query if safe
     if (sql && isSafeSQL(sql)) {
       console.log("[AIAssistant] Executing SQL via exec_sql:", sql);
-      const { data, error } = await supabaseAdmin.rpc("exec_sql", { sql, active_user_id: userId });
+      const { data, error } = await supabaseAdmin.rpc("exec_sql", { sql });
       if (error) {
         queryError = error.message;
         console.error("[AIAssistant] DB Execution failed:", error.message);
