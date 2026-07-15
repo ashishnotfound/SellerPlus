@@ -1,3 +1,4 @@
+// Trigger redeployment to force Vercel build of all TS fixes
 "use client";
 
 import Link from "next/link";
