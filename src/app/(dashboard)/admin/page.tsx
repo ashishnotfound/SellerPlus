@@ -106,8 +106,8 @@ export default function AdminSuperPanel() {
       setMerchants(mapped);
 
       // Compute statistics
-      const paidCount = subs?.filter((s) => s.plan_type !== "free" && s.status === "active").length || 0;
-      const suspCount = profiles?.filter((p) => p.is_suspended).length || 0;
+      const paidCount = subs?.filter((s: any) => s.plan_type !== "free" && s.status === "active").length || 0;
+      const suspCount = profiles?.filter((p: any) => p.is_suspended).length || 0;
       
       const uniqueWorkspaces = new Set(
         memberships?.map((m: any) => {
