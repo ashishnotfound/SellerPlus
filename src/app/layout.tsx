@@ -20,6 +20,16 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className="dark">
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `window.__SUPABASE_CONFIG__ = {
+              url: ${JSON.stringify(process.env.NEXT_PUBLIC_SUPABASE_URL)},
+              anonKey: ${JSON.stringify(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)}
+            };`
+          }}
+        />
+      </head>
       <body className={`${inter.variable} font-sans antialiased bg-[#050506] text-[#f4f4f5]`}>
         <Providers>
           {children}

@@ -1,7 +1,18 @@
 import { createClient } from "@supabase/supabase-js";
 
-const getSupabaseUrl = () => process.env.NEXT_PUBLIC_SUPABASE_URL || "https://placeholder-url.supabase.co";
-const getSupabaseAnonKey = () => process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "placeholder-anon-key";
+const getSupabaseUrl = () => {
+  if (typeof window !== "undefined" && (window as any).__SUPABASE_CONFIG__?.url) {
+    return (window as any).__SUPABASE_CONFIG__.url;
+  }
+  return process.env.NEXT_PUBLIC_SUPABASE_URL || "https://placeholder-url.supabase.co";
+};
+
+const getSupabaseAnonKey = () => {
+  if (typeof window !== "undefined" && (window as any).__SUPABASE_CONFIG__?.anonKey) {
+    return (window as any).__SUPABASE_CONFIG__.anonKey;
+  }
+  return process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "placeholder-anon-key";
+};
 
 let _supabaseClient: any = null;
 
