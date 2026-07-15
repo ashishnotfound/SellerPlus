@@ -18,7 +18,7 @@ export function useRealtimeRecommendations(userId?: string) {
       if (error) throw error;
 
       if (data) {
-        const mapped: ExplainableRecommendation[] = data.map((row) => ({
+        const mapped: ExplainableRecommendation[] = data.map((row: any) => ({
           id: row.id,
           recommendation: row.recommendation,
           priority: "Medium",
@@ -60,7 +60,7 @@ export function useRealtimeRecommendations(userId?: string) {
           table: "ai_recommendation_history",
           filter: `user_id=eq.${userId}`,
         },
-        (payload) => {
+        (payload: any) => {
           // Whenever a change happens, refetch. For a production app we'd mutate state directly based on payload.
           fetchRecommendations();
         }

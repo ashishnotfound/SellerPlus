@@ -240,7 +240,7 @@ export const useAnalyticsStore = create<AnalyticsStore>((set, get) => {
         // --- 1. Fetch Widget Layouts ---
         const { data: layouts } = await supabase.from("widget_layouts").select("*").eq("user_id", userId);
         if (layouts && layouts.length > 0) {
-          const mapped = layouts.map(l => ({
+          const mapped = layouts.map((l: any) => ({
             id: l.widget_id,
             title: DEFAULT_WIDGETS.find(w => w.id === l.widget_id)?.title || l.widget_id,
             x: l.x_pos,
@@ -266,7 +266,7 @@ export const useAnalyticsStore = create<AnalyticsStore>((set, get) => {
         // --- 2. Fetch Financial Logs ---
         const { data: finData } = await supabase.from("seller_financial_metrics").select("*").eq("user_id", userId).order("date", { ascending: false });
         if (finData && finData.length > 0) {
-          const mappedFin = finData.map(f => ({
+          const mappedFin = finData.map((f: any) => ({
             date: f.date,
             revenue: Number(f.revenue),
             ordersCount: f.orders_count,
@@ -287,7 +287,7 @@ export const useAnalyticsStore = create<AnalyticsStore>((set, get) => {
         // --- 3. Fetch Alerts ---
         const { data: alertsDb } = await supabase.from("alert_logs").select("*").eq("user_id", userId).order("created_at", { ascending: false });
         if (alertsDb && alertsDb.length > 0) {
-          const mappedAlerts: SystemAlert[] = alertsDb.map(a => ({
+          const mappedAlerts: SystemAlert[] = alertsDb.map((a: any) => ({
             id: a.id,
             type: a.type,
             title: a.title,
@@ -317,7 +317,7 @@ export const useAnalyticsStore = create<AnalyticsStore>((set, get) => {
           .eq("user_id", userId);
 
         if (listDb && listDb.length > 0) {
-          const mappedInventory: InventoryItem[] = listDb.map(l => {
+          const mappedInventory: InventoryItem[] = listDb.map((l: any) => {
             const velocity = l.sales_30d !== null && l.sales_30d !== undefined ? l.sales_30d / 30 : null;
             const daysUntilStockout = (velocity !== null && velocity > 0) ? Math.ceil((l.available_qty || 0) / velocity) : null;
             

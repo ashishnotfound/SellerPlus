@@ -174,7 +174,7 @@ export const useSubscription = create<SubscriptionState>((set, get) => ({
 
     // Step 2: Sync from server (non-blocking)
     if (isBrowser) {
-      supabase.auth.getSession().then(({ data: { session } }) => {
+      supabase.auth.getSession().then(({ data: { session } }: any) => {
         fetch("/api/billing/verify-plan", {
           method: "GET",
           headers: {

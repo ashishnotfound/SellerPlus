@@ -166,7 +166,7 @@ export const useListingsStore = create<ListingsStore>((set, get) => {
         // --- 1. Load Listings ---
         const { data: listDb, error } = await supabase.from("listings").select("*").eq("user_id", userId);
         if (listDb && listDb.length > 0) {
-          const mapped: Listing[] = listDb.map(l => ({
+          const mapped: Listing[] = listDb.map((l: any) => ({
             id: l.id,
             master_sku_id: l.master_sku_id,
             channel: l.channel,
@@ -226,7 +226,7 @@ export const useListingsStore = create<ListingsStore>((set, get) => {
           for (const list of mapped) {
             const { data: verDb } = await supabase.from("listing_versions").select("*").eq("listing_id", list.id).order("version_number", { ascending: false });
             if (verDb) {
-              versionMap[list.id] = verDb.map(v => ({
+              versionMap[list.id] = verDb.map((v: any) => ({
                 id: v.id,
                 listingId: v.listing_id,
                 title: v.title,
@@ -399,7 +399,7 @@ export const useListingsStore = create<ListingsStore>((set, get) => {
             set(state => ({
               versions: {
                 ...state.versions,
-                [row[0].id]: verDb.map(v => ({
+                [row[0].id]: verDb.map((v: any) => ({
                   id: v.id,
                   listingId: v.listing_id,
                   title: v.title,
@@ -545,7 +545,7 @@ export const useListingsStore = create<ListingsStore>((set, get) => {
           set(state => ({
             versions: {
               ...state.versions,
-              [id]: verDb.map(v => ({
+              [id]: verDb.map((v: any) => ({
                 id: v.id,
                 listingId: v.listing_id,
                 title: v.title,

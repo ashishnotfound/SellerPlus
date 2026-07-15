@@ -334,7 +334,7 @@ export default function SettingsPage() {
 
       const existingSkuMap = new Map<string, string>();
       if (existingListings) {
-        existingListings.forEach((l) => {
+        existingListings.forEach((l: any) => {
           if (l.sku) existingSkuMap.set(l.sku, l.id);
         });
       }
