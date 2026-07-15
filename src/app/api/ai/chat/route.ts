@@ -1,12 +1,6 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
 import { routeLLMRequest } from "@/lib/ai/utils";
 import { ProviderCapability } from "@/lib/ai/types";
-
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
 
 const SCHEMA_DESCRIPTION = `
 PostgreSQL Database Schema (strictly read-only access for analytical queries):
@@ -115,7 +109,7 @@ export async function POST(request: Request) {
     }
 
     // Authenticate the request and get the validated userId and supabaseAdmin client
-    const { userId } = await authenticateWithDevFallback(request, context?.userId);
+    const { userId, supabaseAdmin } = await authenticateWithDevFallback(request, context?.userId);
 
     // Step 1: Generate SQL query to answer user's question
     const queryPrompt = `
