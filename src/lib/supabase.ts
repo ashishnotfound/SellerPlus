@@ -1,9 +1,24 @@
 import { createClient } from "@supabase/supabase-js";
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "https://placeholder-url.supabase.co";
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "placeholder-anon-key";
+const getSupabaseUrl = () => process.env.NEXT_PUBLIC_SUPABASE_URL || "https://placeholder-url.supabase.co";
+const getSupabaseAnonKey = () => process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "placeholder-anon-key";
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+let _supabaseClient: any = null;
+
+export const getSupabase = () => {
+  if (!_supabaseClient) {
+    _supabaseClient = createClient(getSupabaseUrl(), getSupabaseAnonKey());
+  }
+  return _supabaseClient;
+};
+
+// For backwards compatibility, proxy the supabase export if it's imported statically
+export const supabase = new Proxy({} as any, {
+  get: (target, prop) => {
+    return getSupabase()[prop as keyof typeof _supabaseClient];
+  }
+});
+
 
 export interface Profile {
   id: string;
