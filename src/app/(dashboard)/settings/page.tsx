@@ -31,7 +31,9 @@ export default function SettingsPage() {
     anthropic: { api_key: "", model_name: "claude-3-5-sonnet-20241022", endpoint_url: "", priority: 1, is_enabled: false },
     deepseek: { api_key: "", model_name: "deepseek-chat", endpoint_url: "", priority: 1, is_enabled: false },
     openrouter: { api_key: "", model_name: "google/gemini-2.5-flash", endpoint_url: "", priority: 1, is_enabled: false },
-    ollama: { api_key: "", model_name: "llama3", endpoint_url: "http://localhost:11434/v1/chat/completions", priority: 1, is_enabled: false }
+    ollama: { api_key: "", model_name: "llama3", endpoint_url: "http://localhost:11434/v1/chat/completions", priority: 1, is_enabled: false },
+    grok: { api_key: "", model_name: "grok-2-1212", endpoint_url: "https://api.x.ai/v1/chat/completions", priority: 1, is_enabled: false },
+    xai: { api_key: "", model_name: "grok-beta", endpoint_url: "https://api.x.ai/v1/chat/completions", priority: 1, is_enabled: false }
   });
   const [activeLlmTab, setActiveLlmTab] = useState<string>("gemini");
   const [testingLlm, setTestingLlm] = useState<string | null>(null);

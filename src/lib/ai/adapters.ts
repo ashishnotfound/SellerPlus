@@ -68,6 +68,22 @@ export const PROVIDER_CAPABILITIES: Record<string, ProviderCapability[]> = {
     ProviderCapability.CodeGeneration,
     ProviderCapability.ToolUse,
     ProviderCapability.LowCost
+  ],
+  grok: [
+    ProviderCapability.JsonMode,
+    ProviderCapability.StructuredJson,
+    ProviderCapability.FunctionCalling,
+    ProviderCapability.ToolUse,
+    ProviderCapability.Reasoning,
+    ProviderCapability.FastResponse
+  ],
+  xai: [
+    ProviderCapability.JsonMode,
+    ProviderCapability.StructuredJson,
+    ProviderCapability.FunctionCalling,
+    ProviderCapability.ToolUse,
+    ProviderCapability.Reasoning,
+    ProviderCapability.FastResponse
   ]
 };
 
@@ -136,6 +152,8 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
       this.endpoint = "https://api.deepseek.com/chat/completions";
     } else if (setting.provider === "openrouter") {
       this.endpoint = "https://openrouter.ai/api/v1/chat/completions";
+    } else if (setting.provider === "grok" || setting.provider === "xai") {
+      this.endpoint = "https://api.x.ai/v1/chat/completions";
     } else {
       this.endpoint = setting.endpoint_url || "http://localhost:11434/v1/chat/completions";
     }
@@ -272,6 +290,8 @@ export function getAdapterForSetting(setting: LLMSetting): ProviderAdapter {
     case "deepseek":
     case "openrouter":
     case "ollama":
+    case "grok":
+    case "xai":
       return new OpenAICompatibleAdapter(setting);
     default:
       throw new Error(`No adapter mapped for AI provider: ${setting.provider}`);
