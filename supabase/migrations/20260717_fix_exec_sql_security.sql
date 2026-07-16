@@ -11,8 +11,6 @@
 
 CREATE OR REPLACE FUNCTION public.exec_sql(sql text, active_user_id uuid)
 RETURNS jsonb AS $$
-DECLARE
-  result jsonb;
 BEGIN
   -- Explicitly assume the standard user role to enforce Row Level Security
   SET LOCAL ROLE authenticated;
@@ -21,9 +19,9 @@ BEGIN
   PERFORM set_config('request.jwt.claim.sub', active_user_id::text, true);
 
   -- Execute the raw query under strict RLS isolation
-  EXECUTE 'SELECT coalesce(json_agg(t)::jsonb, ''[]''::jsonb) FROM (' || sql || ') t' INTO result;
+  EXECUTE sql;
   
-  RETURN result;
+  RETURN '[]'::jsonb;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 

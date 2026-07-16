@@ -149,12 +149,17 @@ async function handleCreateListingDraft(ctx: JobContext): Promise<JobHandlerResu
 }
 
 async function handleFindKeywords(ctx: JobContext): Promise<JobHandlerResult> {
-  // Reuse BIEngine in Store Audit mode — keyword insights are embedded in recommendations
-  const { BIEngine } = await import("@/lib/ai/bi-engine");
-  const result = await BIEngine.runAnalysis(ctx.userId, "Store Audit", "MAXIMIZE_VISIBILITY");
+  const { generateKeywords } = await import("@/lib/ai/keyword-engine");
+  
+  const productName = ctx.payload?.productName || "My Amazon Product";
+  const category = ctx.payload?.category || "General";
+  const competitors = ctx.payload?.competitors || "Top ranking competitors";
+
+  const result = await generateKeywords(productName, category, competitors, ctx.userId);
+  
   return {
-    output: result as unknown as Record<string, unknown>,
-    summary: `Keyword analysis complete — ${result.recommendations.length} optimisation opportunities.`,
+    output: { keywords: result } as unknown as Record<string, unknown>,
+    summary: `Keyword analysis complete — generated ${result.length} highly optimized keywords.`,
     estimatedCostUsd: 0.002,
   };
 }

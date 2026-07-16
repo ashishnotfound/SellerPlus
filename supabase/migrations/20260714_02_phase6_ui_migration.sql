@@ -1,37 +1,69 @@
 -- 20260715_phase6_ui_migration.sql
 
-ALTER TABLE public.ai_recommendation_history 
-RENAME COLUMN confidence_score TO confidence;
+DO $$ 
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns 
+    WHERE table_name='ai_recommendation_history' AND column_name='confidence_score'
+  ) THEN
+    ALTER TABLE public.ai_recommendation_history RENAME COLUMN confidence_score TO confidence;
+  END IF;
+END $$;
 
-ALTER TABLE public.ai_recommendation_history 
-ADD COLUMN confidence_reason TEXT;
+DO $$ 
+BEGIN
+  -- RENAME COLUMN (already wrapped above)
+  
+  -- ADD COLUMN confidence_reason
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='ai_recommendation_history' AND column_name='confidence_reason') THEN
+    ALTER TABLE public.ai_recommendation_history ADD COLUMN confidence_reason TEXT;
+  END IF;
 
-ALTER TABLE public.ai_recommendation_history 
-ADD COLUMN source_kpis JSONB NOT NULL DEFAULT '[]'::jsonb;
+  -- ADD COLUMN source_kpis
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='ai_recommendation_history' AND column_name='source_kpis') THEN
+    ALTER TABLE public.ai_recommendation_history ADD COLUMN source_kpis JSONB NOT NULL DEFAULT '[]'::jsonb;
+  END IF;
 
-ALTER TABLE public.ai_recommendation_history 
-ADD COLUMN simulation JSONB;
+  -- ADD COLUMN simulation
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='ai_recommendation_history' AND column_name='simulation') THEN
+    ALTER TABLE public.ai_recommendation_history ADD COLUMN simulation JSONB;
+  END IF;
 
-ALTER TABLE public.ai_recommendation_history 
-ADD COLUMN dependencies JSONB NOT NULL DEFAULT '[]'::jsonb;
+  -- ADD COLUMN dependencies
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='ai_recommendation_history' AND column_name='dependencies') THEN
+    ALTER TABLE public.ai_recommendation_history ADD COLUMN dependencies JSONB NOT NULL DEFAULT '[]'::jsonb;
+  END IF;
 
-ALTER TABLE public.ai_recommendation_history 
-ADD COLUMN conflicts JSONB NOT NULL DEFAULT '[]'::jsonb;
+  -- ADD COLUMN conflicts
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='ai_recommendation_history' AND column_name='conflicts') THEN
+    ALTER TABLE public.ai_recommendation_history ADD COLUMN conflicts JSONB NOT NULL DEFAULT '[]'::jsonb;
+  END IF;
 
-ALTER TABLE public.ai_recommendation_history 
-ADD COLUMN risk_level VARCHAR(50);
+  -- ADD COLUMN risk_level
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='ai_recommendation_history' AND column_name='risk_level') THEN
+    ALTER TABLE public.ai_recommendation_history ADD COLUMN risk_level VARCHAR(50);
+  END IF;
 
-ALTER TABLE public.ai_recommendation_history 
-ADD COLUMN estimated_time VARCHAR(255);
+  -- ADD COLUMN estimated_time
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='ai_recommendation_history' AND column_name='estimated_time') THEN
+    ALTER TABLE public.ai_recommendation_history ADD COLUMN estimated_time VARCHAR(255);
+  END IF;
 
-ALTER TABLE public.ai_recommendation_history 
-ADD COLUMN lifecycle VARCHAR(50) NOT NULL DEFAULT 'Draft';
+  -- ADD COLUMN lifecycle
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='ai_recommendation_history' AND column_name='lifecycle') THEN
+    ALTER TABLE public.ai_recommendation_history ADD COLUMN lifecycle VARCHAR(50) NOT NULL DEFAULT 'Draft';
+  END IF;
 
-ALTER TABLE public.ai_recommendation_history 
-ADD COLUMN action_type VARCHAR(255);
+  -- ADD COLUMN action_type
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='ai_recommendation_history' AND column_name='action_type') THEN
+    ALTER TABLE public.ai_recommendation_history ADD COLUMN action_type VARCHAR(255);
+  END IF;
 
-ALTER TABLE public.ai_recommendation_history 
-ADD COLUMN action_payload JSONB;
+  -- ADD COLUMN action_payload
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='ai_recommendation_history' AND column_name='action_payload') THEN
+    ALTER TABLE public.ai_recommendation_history ADD COLUMN action_payload JSONB;
+  END IF;
+END $$;
 
 -- Drop legacy columns safely
 ALTER TABLE public.ai_recommendation_history DROP COLUMN IF EXISTS formula;

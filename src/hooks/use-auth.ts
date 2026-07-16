@@ -151,6 +151,37 @@ export const useAuth = create<AuthStore>((set) => ({
   checkSession: async () => {
     set({ loading: true });
     if (typeof window !== "undefined") {
+      // 1. First, let the Supabase client restore its own JWT session.
+      //    This is critical so RLS policies (auth.uid()) work on direct table calls.
+      try {
+        const { data: sessionData } = await supabase.auth.getSession();
+        if (sessionData?.session?.user) {
+          const sbUser = sessionData.session.user;
+          // Fetch full profile to get role and admin status
+          const { data: profile } = await supabase
+            .from("profiles")
+            .select("role, is_super_admin, is_suspended")
+            .eq("id", sbUser.id)
+            .maybeSingle();
+
+          const uSession: UserSession = {
+            id: sbUser.id,
+            email: sbUser.email || "",
+            fullName: sbUser.user_metadata?.full_name || "Merchant Owner",
+            role: profile?.role || "owner",
+            isSuperAdmin: profile?.is_super_admin || false,
+            isSuspended: profile?.is_suspended || false,
+            isAuthenticated: true,
+          };
+          localStorage.setItem("sp_auth_user", JSON.stringify(uSession));
+          set({ user: uSession, loading: false });
+          return;
+        }
+      } catch (e) {
+        console.warn("[useAuth] Supabase getSession failed, falling back to localStorage:", e);
+      }
+
+      // 2. Fallback: use the cached localStorage session
       const stored = localStorage.getItem("sp_auth_user");
       if (stored) {
         try {

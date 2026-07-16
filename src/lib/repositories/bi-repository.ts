@@ -60,7 +60,7 @@ export class BIRepository {
       .from("advertising_campaigns")
       .select("spend, sales, impressions, clicks, status")
       .eq("user_id", userId)
-      .gte("created_at", thirtyDaysAgo.toISOString());
+      .gte("updated_at", thirtyDaysAgo.toISOString());
 
     if (error) throw new Error(`BIRepository.getAdsSummary failed: ${error.message}`);
 

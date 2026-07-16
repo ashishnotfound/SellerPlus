@@ -12,6 +12,10 @@ const inter = Inter({
 export const metadata: Metadata = {
   title: "SellerPlus - AI Commerce Operating System for Modern Sellers",
   description: "Manage Amazon, Flipkart, Meesho, and Shopify with real-time analytics, AI Listing Judges, keyword intelligence, and warehouse sync.",
+  icons: {
+    icon: "/favicon.svg",
+    shortcut: "/favicon.svg",
+  },
 };
 
 export default function RootLayout({

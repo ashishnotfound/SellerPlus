@@ -13,9 +13,6 @@ export default function SettingsPage() {
   const [fullName, setFullName] = useState(user?.fullName || "");
   const [email, setEmail] = useState(user?.email || "");
   const [role, setRole] = useState(user?.role || "Owner");
-  const [geminiKey, setGeminiKey] = useState(
-    typeof window !== "undefined" ? (localStorage.getItem("gemini_api_key") || "") : ""
-  );
 
   // Multi-LLM gateway configs
   const [llmConfigs, setLlmConfigs] = useState<Record<string, {

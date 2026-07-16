@@ -36,6 +36,7 @@ export async function GET(request: Request): Promise<NextResponse> {
       .from("bi_jobs")
       .select("id, user_id, job_type, payload, attempts, max_attempts")
       .eq("status", "queued")
+      .or(`scheduled_at.is.null,scheduled_at.lte.${new Date().toISOString()}`)
       .order("priority", { ascending: true })
       .order("created_at", { ascending: true })
       .limit(BATCH_SIZE);
@@ -130,12 +131,22 @@ export async function GET(request: Request): Promise<NextResponse> {
         const currentAttempts = (job.attempts as number) + 1;
         const maxAttempts = (job.max_attempts as number) ?? registryEntry.retryPolicy.maxAttempts;
         const shouldRetry = currentAttempts < maxAttempts;
+        
+        let scheduledAt: string | null = null;
+        if (shouldRetry) {
+          // Exponential backoff: 2^attempts * 5 minutes (e.g., 5m, 10m, 20m)
+          const delayMinutes = Math.pow(2, currentAttempts - 1) * 5;
+          const nextRun = new Date();
+          nextRun.setMinutes(nextRun.getMinutes() + delayMinutes);
+          scheduledAt = nextRun.toISOString();
+        }
 
         log.error(`[BiProcessor] Job ${jobId} failed (attempt ${currentAttempts}/${maxAttempts})`, undefined, {
           jobId,
           jobType,
           error: err.message,
           willRetry: shouldRetry,
+          nextRun: scheduledAt
         });
 
         await adminClient
@@ -144,6 +155,7 @@ export async function GET(request: Request): Promise<NextResponse> {
             status: shouldRetry ? "queued" : "failed",
             error: err.message,
             completed_at: shouldRetry ? null : new Date().toISOString(),
+            scheduled_at: scheduledAt,
           })
           .eq("id", jobId);
 

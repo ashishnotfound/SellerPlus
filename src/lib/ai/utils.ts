@@ -455,12 +455,33 @@ export async function routeLLMRequest(
 }
 
 /**
- * Fallback direct invocation for Gemini using process.env configurations.
+ * Fallback direct invocation. Tries xAI first (if XAI_API_KEY is set), then Gemini.
+ * This provides a server-side safety net when no DB LLM settings are configured.
  */
 async function callFallbackGemini(prompt: string, options?: GenerationOptions): Promise<GenerationResult> {
+  // Try xAI / Grok first (user's configured key)
+  const xaiKey = process.env.XAI_API_KEY;
+  if (xaiKey) {
+    try {
+      const xaiSetting: LLMSetting = {
+        provider: "grok",
+        api_key: xaiKey,
+        model_name: "grok-3-mini",
+        priority: 1,
+        is_enabled: true
+      };
+      const xaiAdapter = getAdapterForSetting(xaiSetting);
+      log.info("[AIGateway] Fallback: calling xAI Grok as server-level default.");
+      return await xaiAdapter.generateText(prompt, options);
+    } catch (err: any) {
+      log.warn(`[AIGateway] xAI fallback failed: ${err.message}. Trying Gemini...`);
+    }
+  }
+
+  // Try Gemini as secondary fallback
   const defaultKey = process.env.GEMINI_API_KEY;
   if (!defaultKey) {
-    throw new Error("No LLM settings configured and default GEMINI_API_KEY environment is missing.");
+    throw new Error("No LLM settings configured and neither XAI_API_KEY nor GEMINI_API_KEY environment variables are set.");
   }
   const fallbackSetting: LLMSetting = {
     provider: "gemini",
@@ -472,4 +493,5 @@ async function callFallbackGemini(prompt: string, options?: GenerationOptions): 
   const adapter = getAdapterForSetting(fallbackSetting);
   return adapter.generateText(prompt, options);
 }
+
 

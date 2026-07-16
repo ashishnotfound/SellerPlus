@@ -23,6 +23,8 @@ export interface OrderRecord {
   last_update_date: string | null;
   fulfillment_channel: string | null;
   marketplace_id: string | null;
+  buyer_name: string | null;
+  shipping_address_state: string | null;
   number_of_items_shipped: number;
   number_of_items_unshipped: number;
   net_profit?: number;

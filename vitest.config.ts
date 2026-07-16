@@ -7,6 +7,7 @@ export default defineConfig({
     environment: "node",
     // Test file patterns
     include: ["src/__tests__/**/*.test.ts"],
+    setupFiles: ["./vitest.setup.ts"],
     // Coverage configuration
     coverage: {
       provider: "v8",

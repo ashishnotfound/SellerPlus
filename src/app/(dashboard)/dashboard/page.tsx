@@ -184,6 +184,26 @@ export default function DashboardPage() {
     ? new Date(dataUpdatedAt).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })
     : null;
 
+  // Fetch onboarding state (cost profiles & ai chat usage)
+  const { data: onboardingState } = useQuery({
+    queryKey: ["onboarding", user?.id],
+    queryFn: async () => {
+      const [costRes, chatRes] = await Promise.all([
+        supabase.from("cost_profiles").select("id").eq("user_id", user?.id).limit(1),
+        supabase.from("ai_recommendation_history").select("id").eq("user_id", user?.id).limit(1)
+      ]);
+      return {
+        costProfileAdded: (costRes.data?.length ?? 0) > 0,
+        aiChatUsed: (chatRes.data?.length ?? 0) > 0
+      };
+    },
+    enabled: !!user?.id,
+  });
+
+  const costProfileAdded = onboardingState?.costProfileAdded ?? false;
+  const aiChatUsed = onboardingState?.aiChatUsed ?? false;
+  const showBanner = !amazonConnected || !costProfileAdded || !aiChatUsed;
+
   return (
     <div className="flex flex-col gap-8 pb-12">
       {/* Page Header */}
@@ -212,13 +232,13 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Onboarding Banner — only shown if Amazon not connected */}
-      {!amazonConnected && (
+      {/* Onboarding Banner — shown until all steps complete */}
+      {showBanner && (
         <OnboardingBanner
           steps={{
-            amazonConnected: false,
-            costProfileAdded: false,
-            aiChatUsed: false,
+            amazonConnected: amazonConnected,
+            costProfileAdded: costProfileAdded,
+            aiChatUsed: aiChatUsed,
           }}
         />
       )}

@@ -538,11 +538,11 @@ export default function RedesignedOrdersPage() {
                     <div className="grid grid-cols-2 gap-3 p-3 rounded-xl border border-white/5 bg-white/[0.01]">
                       <div>
                         <span className="text-zinc-500 text-[10px]">Buyer Name</span>
-                        <p className="text-white font-medium mt-0.5">Merchant Buyer</p>
+                        <p className="text-white font-medium mt-0.5">{drawerOrder.buyer_name || "N/A"}</p>
                       </div>
                       <div>
                         <span className="text-zinc-500 text-[10px]">Delivery State</span>
-                        <p className="text-white font-medium mt-0.5">Maharashtra, IN</p>
+                        <p className="text-white font-medium mt-0.5">{drawerOrder.shipping_address_state || "N/A"}</p>
                       </div>
                     </div>
                   </div>
