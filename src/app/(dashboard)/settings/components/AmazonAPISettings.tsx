@@ -55,6 +55,8 @@ function buildOAuthUrl(provider: Provider, customClientId?: string): string {
   const clientId = customClientId || defaultId || "";
   const redirectUri = process.env.NEXT_PUBLIC_AMAZON_OAUTH_REDIRECT_URI || `${window.location.origin}/api/amazon/callback`;
   
+  console.log(`[AmazonOAuth] provider: ${provider}, customClientId: ${customClientId}, defaultId: ${defaultId}, resolved clientId: ${clientId}`);
+
   // Safe UUID generation that doesn't crash in insecure contexts
   let uuid = "";
   if (typeof window !== "undefined" && window.crypto && window.crypto.randomUUID) {
