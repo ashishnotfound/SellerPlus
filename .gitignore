@@ -27,3 +27,8 @@ Thumbs.db
 # Misc
 dist/
 build/
+# next-pwa generated
+public/sw.js
+public/workbox-*.js
+public/fallback-*.js
+public/swe-worker-*.js
