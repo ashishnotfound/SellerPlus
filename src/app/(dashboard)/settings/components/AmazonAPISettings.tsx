@@ -203,6 +203,8 @@ export function AmazonAPISettings() {
   const [savingCreds, setSavingCreds] = useState(false);
   const [connecting, setConnecting] = useState<Provider | null>(null);
   const [syncingListings, setSyncingListings] = useState(false);
+  const [syncingOrders, setSyncingOrders] = useState(false);
+  const [syncingAds, setSyncingAds] = useState(false);
 
   const fetchData = useCallback(async () => {
     if (!user?.id) return;
@@ -338,24 +340,50 @@ export function AmazonAPISettings() {
     try {
       useToastStore.getState().success("Syncing", "Requesting Listings Report from Amazon... This may take a few minutes.");
       
-      const res = await fetch("/api/amazon/sync-listings", {
-        method: "POST",
-      });
-      
+      const res = await fetch("/api/amazon/sync-listings", { method: "POST" });
       const data = await res.json();
       
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to sync listings");
-      }
+      if (!res.ok) throw new Error(data.error || "Failed to sync listings");
       
-      useToastStore.getState().success(
-        "Sync Complete", 
-        `Successfully imported/updated ${data.synced || data.added || 0} listings from Amazon.`
-      );
+      useToastStore.getState().success("Sync Complete", `Successfully imported/updated ${data.synced || data.added || 0} listings from Amazon.`);
     } catch (err: any) {
       useToastStore.getState().error("Sync Failed", err.message);
     }
     setSyncingListings(false);
+  };
+
+  const handleSyncOrders = async () => {
+    setSyncingOrders(true);
+    try {
+      useToastStore.getState().success("Syncing", "Fetching recent orders from SP-API...");
+      
+      const res = await fetch("/api/amazon/sync-orders", { method: "POST" });
+      const data = await res.json();
+      
+      if (!res.ok) throw new Error(data.error || "Failed to sync orders");
+      
+      useToastStore.getState().success("Sync Complete", `Successfully imported/updated ${data.synced || data.imported || 0} orders.`);
+    } catch (err: any) {
+      useToastStore.getState().error("Sync Failed", err.message);
+    }
+    setSyncingOrders(false);
+  };
+
+  const handleSyncAds = async () => {
+    setSyncingAds(true);
+    try {
+      useToastStore.getState().success("Syncing", "Fetching Ads campaigns & performance data...");
+      
+      const res = await fetch("/api/amazon/sync-ads", { method: "POST" });
+      const data = await res.json();
+      
+      if (!res.ok) throw new Error(data.error || "Failed to sync ads");
+      
+      useToastStore.getState().success("Sync Complete", `Successfully imported/updated ${data.synced || data.imported || 0} ads metrics.`);
+    } catch (err: any) {
+      useToastStore.getState().error("Sync Failed", err.message);
+    }
+    setSyncingAds(false);
   };
 
   const spToken = tokens.find((t) => t.provider === "sp") ?? null;
@@ -452,7 +480,39 @@ export function AmazonAPISettings() {
           </div>
         </div>
         
-        <div className="flex justify-end">
+        <div className="flex items-center justify-between border-t border-white/5 pt-6 mt-6">
+          <div className="flex items-center gap-2">
+            {(creds.sp_refresh_token || spToken) && (
+              <>
+                <button
+                  onClick={handleSyncListings}
+                  disabled={syncingListings}
+                  className="h-10 px-4 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 font-bold text-xs flex items-center gap-2 transition-all disabled:opacity-50"
+                >
+                  {syncingListings ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                  {syncingListings ? "Syncing..." : "Sync Listings"}
+                </button>
+                <button
+                  onClick={handleSyncOrders}
+                  disabled={syncingOrders}
+                  className="h-10 px-4 rounded-xl bg-orange-500/10 hover:bg-orange-500/20 border border-orange-500/30 text-orange-400 font-bold text-xs flex items-center gap-2 transition-all disabled:opacity-50"
+                >
+                  {syncingOrders ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                  {syncingOrders ? "Syncing..." : "Sync Orders"}
+                </button>
+              </>
+            )}
+            {(creds.ads_refresh_token || adsToken) && (
+              <button
+                onClick={handleSyncAds}
+                disabled={syncingAds}
+                className="h-10 px-4 rounded-xl bg-yellow-500/10 hover:bg-yellow-500/20 border border-yellow-500/30 text-yellow-400 font-bold text-xs flex items-center gap-2 transition-all disabled:opacity-50"
+              >
+                {syncingAds ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                {syncingAds ? "Syncing..." : "Sync Ads"}
+              </button>
+            )}
+          </div>
           <button
             onClick={handleSaveCreds}
             disabled={savingCreds}
