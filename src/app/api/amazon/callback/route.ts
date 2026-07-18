@@ -67,11 +67,18 @@ export async function GET(req: Request) {
       })
     });
 
-    const tokenData = await tokenResponse.json();
+    const responseText = await tokenResponse.text();
+    let tokenData: any = {};
+    try {
+      tokenData = JSON.parse(responseText);
+    } catch (e: any) {
+      log.error(`[API/Amazon] Failed to parse token response JSON: ${responseText}`);
+    }
 
     if (!tokenResponse.ok) {
+      const errMsg = tokenData.error_description || tokenData.error || `HTTP_${tokenResponse.status}`;
       log.error(`[API/Amazon] Token exchange failed: ${JSON.stringify(tokenData)}`);
-      return NextResponse.redirect(new URL(`/settings?amazon_error=Token_exchange_failed`, req.url));
+      return NextResponse.redirect(new URL(`/settings?amazon_error=${encodeURIComponent(errMsg)}`, req.url));
     }
 
     // Save tokens in Supabase using the service role to bypass RLS for inserts

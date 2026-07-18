@@ -53,11 +53,23 @@ function buildOAuthUrl(provider: Provider, customClientId?: string): string {
     : process.env.NEXT_PUBLIC_AMAZON_ADS_CLIENT_ID;
     
   const clientId = customClientId || defaultId || "";
+  const redirectUri = process.env.NEXT_PUBLIC_AMAZON_OAUTH_REDIRECT_URI || `${window.location.origin}/api/amazon/callback`;
+  
+  // Safe UUID generation that doesn't crash in insecure contexts
+  let uuid = "";
+  if (typeof window !== "undefined" && window.crypto && window.crypto.randomUUID) {
+    uuid = window.crypto.randomUUID();
+  } else {
+    uuid = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+  }
 
   const params = new URLSearchParams({
     application_id: clientId,
-    redirect_uri: `${window.location.origin}/api/amazon/callback`,
-    state: `${provider}:${crypto.randomUUID()}`,
+    redirect_uri: redirectUri,
+    state: `${provider}:${uuid}`,
+    ...(provider === "sp" && {
+      version: "beta",
+    }),
     ...(provider === "ads" && {
       client_id: clientId,
       scope: ADS_SCOPE,
@@ -224,14 +236,22 @@ export function AmazonAPISettings() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  // Listen for callback success via URL params
+  // Listen for callback success or failure via URL params
   useEffect(() => {
     const url = new URL(window.location.href);
-    if (url.searchParams.get("amazon_connected")) {
-      useToastStore.getState().success("Amazon Connected", "Your Amazon account has been linked.");
+    const connected = url.searchParams.get("amazon_connected");
+    const errorParam = url.searchParams.get("amazon_error");
+
+    if (connected) {
+      useToastStore.getState().success("Amazon Connected", "Your Amazon account has been linked successfully.");
       url.searchParams.delete("amazon_connected");
       window.history.replaceState({}, "", url.toString());
       fetchData();
+    } else if (errorParam) {
+      const readableError = decodeURIComponent(errorParam).replace(/_/g, " ");
+      useToastStore.getState().error("Amazon Connection Failed", readableError);
+      url.searchParams.delete("amazon_error");
+      window.history.replaceState({}, "", url.toString());
     }
   }, [fetchData]);
 
