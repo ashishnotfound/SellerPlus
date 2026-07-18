@@ -27,8 +27,8 @@ export const metadata: Metadata = {
     title: "SellerPlus",
   },
   icons: {
-    icon: "/favicon.svg",
-    shortcut: "/favicon.svg",
+    icon: "/favicon.png",
+    shortcut: "/favicon.png",
     apple: "/android-chrome-192x192.png",
   },
 };

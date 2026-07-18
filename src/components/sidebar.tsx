@@ -148,8 +148,8 @@ function SidebarContent({
     <>
       {/* Logo */}
       <div className="h-14 flex items-center gap-2.5 px-4 border-b border-white/[0.06] shrink-0">
-        <div className="flex items-center justify-center w-7 h-7">
-          <BarChart2 className="w-6 h-6 text-[#00c48c]" />
+        <div className="flex items-center justify-center w-8 h-8 rounded overflow-hidden">
+          <img src="/logo.png" alt="SellerPlus" className="w-full h-full object-cover" />
         </div>
         <span className="text-[15px] font-bold tracking-tight text-white">SellerPlus</span>
         <div className="ml-auto flex items-center gap-1">
