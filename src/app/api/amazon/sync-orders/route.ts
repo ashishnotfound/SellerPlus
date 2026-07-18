@@ -47,7 +47,7 @@ export async function POST(request: Request) {
       .eq("provider", "sp")
       .maybeSingle();
 
-    const refreshToken = userToken?.refresh_token;
+    const refreshToken = userToken?.refresh_token || devCreds?.sp_refresh_token;
 
     if (!clientId || !clientSecret || !refreshToken) {
       return NextResponse.json(

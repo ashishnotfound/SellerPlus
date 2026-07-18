@@ -112,11 +112,7 @@ export async function POST(request: Request) {
       .eq("provider", "ads")
       .maybeSingle();
 
-    if (connError || !userToken) {
-      return NextResponse.json({ error: "No active Amazon Ads connection found. Please configure in Settings." }, { status: 400 });
-    }
-
-    const refreshToken = userToken.refresh_token;
+    const refreshToken = userToken?.refresh_token || devCreds?.ads_refresh_token;
 
     if (!clientId || !clientSecret || !refreshToken) {
       return NextResponse.json(

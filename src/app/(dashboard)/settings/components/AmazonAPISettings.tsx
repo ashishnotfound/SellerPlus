@@ -272,30 +272,12 @@ export function AmazonAPISettings() {
           sp_client_secret: creds.sp_client_secret, 
           ads_client_id: creds.ads_client_id, 
           ads_client_secret: creds.ads_client_secret,
-          merchant_token: creds.merchant_token
+          merchant_token: creds.merchant_token,
+          sp_refresh_token: creds.sp_refresh_token,
+          ads_refresh_token: creds.ads_refresh_token
         }, { onConflict: "user_id" });
         
       if (error) throw error;
-      
-      if (creds.sp_refresh_token) {
-        await supabase.from("amazon_user_tokens").delete().eq("supabase_user_id", user.id).eq("provider", "sp");
-        await supabase.from("amazon_user_tokens").insert({
-          supabase_user_id: user.id,
-          provider: "sp",
-          refresh_token: creds.sp_refresh_token,
-          expires_at: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString()
-        });
-      }
-      
-      if (creds.ads_refresh_token) {
-        await supabase.from("amazon_user_tokens").delete().eq("supabase_user_id", user.id).eq("provider", "ads");
-        await supabase.from("amazon_user_tokens").insert({
-          supabase_user_id: user.id,
-          provider: "ads",
-          refresh_token: creds.ads_refresh_token,
-          expires_at: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString()
-        });
-      }
 
       useToastStore.getState().success("Saved", "Amazon Developer credentials & tokens saved.");
       fetchData();

@@ -41,13 +41,13 @@ export async function POST(req: NextRequest) {
       .eq("provider", "sp")
       .maybeSingle();
 
-    if (!userToken || !userToken.refresh_token) {
+    const refreshToken = userToken?.refresh_token || creds?.sp_refresh_token;
+
+    if (!refreshToken) {
       return NextResponse.json({ 
         error: "No Amazon credentials found or missing refresh token.",
       }, { status: 400 });
     }
-
-    const refreshToken = userToken.refresh_token;
 
     // 4. Run Sync Engine
     const result = await syncAmazonListings(
