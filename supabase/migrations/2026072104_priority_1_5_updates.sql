@@ -42,6 +42,7 @@ REVOKE ALL ON FUNCTION public.claim_jobs(INT, INT) FROM authenticated;
 GRANT EXECUTE ON FUNCTION public.claim_jobs(INT, INT) TO service_role;
 
 -- 3. Create automation_executions table
+DROP TABLE IF EXISTS public.automation_executions CASCADE;
 CREATE TABLE IF NOT EXISTS public.automation_executions (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   workflow_id UUID REFERENCES public.workflow_state(id) ON DELETE SET NULL, -- Can be null if it's a simple one-off job

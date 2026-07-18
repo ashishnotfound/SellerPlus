@@ -23,6 +23,18 @@ export class BIEngine {
       BIRepository.getInventorySummary(userId),
       BIRepository.getCogsSummary(userId),
     ]);
+
+    // Guard: if there is no meaningful data yet (new user / no Amazon connected),
+    // return an empty response instead of making an LLM call with zero data.
+    const hasData =
+      ordersSummary.totalRevenue > 0 ||
+      ordersSummary.totalOrders > 0 ||
+      adsSummary.totalSales > 0 ||
+      inventorySummary.totalItems > 0;
+
+    if (!hasData) {
+      return { analysisMode: "diagnostic", summary: "", widgets: [], recommendations: [] } as unknown as BIResponse;
+    }
     
     // 2. Calculate verified KPIs using KPIService (NO LLM MATH ALLOWED)
     const acos = KPIService.calculateACOS(adsSummary.totalSpend, adsSummary.totalSales);

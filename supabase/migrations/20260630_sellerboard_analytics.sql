@@ -113,6 +113,20 @@ create table if not exists public.alert_logs (
   created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 
+-- Add is_read column idempotently in case table already existed without it
+do $$ begin
+  if not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'alert_logs' and column_name = 'is_read'
+  ) then
+    alter table public.alert_logs add column is_read boolean default false not null;
+  end if;
+end $$;
+
 alter table public.alert_logs enable row level security;
-create policy "Users can manage their own alert logs" on public.alert_logs for all using (auth.uid() = user_id);
+do $$ begin
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='alert_logs' and policyname='Users can manage their own alert logs') then
+    create policy "Users can manage their own alert logs" on public.alert_logs for all using (auth.uid() = user_id);
+  end if;
+end $$;
 create index if not exists idx_alert_logs_user_read on public.alert_logs(user_id, is_read);

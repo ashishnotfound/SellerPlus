@@ -36,11 +36,13 @@ CREATE TRIGGER amazon_tokens_updated_at
 ALTER TABLE public.amazon_user_tokens ENABLE ROW LEVEL SECURITY;
 
 -- Users can only read their own tokens
+DROP POLICY IF EXISTS "Users can view own amazon tokens" ON public.amazon_user_tokens;
 CREATE POLICY "Users can view own amazon tokens"
   ON public.amazon_user_tokens FOR SELECT
   USING (auth.uid() = supabase_user_id);
 
 -- Users can delete their own tokens (disconnect)
+DROP POLICY IF EXISTS "Users can delete own amazon tokens" ON public.amazon_user_tokens;
 CREATE POLICY "Users can delete own amazon tokens"
   ON public.amazon_user_tokens FOR DELETE
   USING (auth.uid() = supabase_user_id);

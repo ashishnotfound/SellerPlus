@@ -5,6 +5,7 @@
 -- 1. Event Bus Ledger
 -- ═══════════════════════════════════════════════════
 
+DROP TABLE IF EXISTS public.events CASCADE;
 CREATE TABLE IF NOT EXISTS public.events (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   user_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE, -- Nullable for system-wide events
@@ -23,14 +24,15 @@ CREATE POLICY "Users can view their events"
   ON public.events FOR SELECT 
   USING (auth.uid() = user_id);
 
-CREATE INDEX idx_events_user_id ON public.events(user_id);
-CREATE INDEX idx_events_event_type ON public.events(event_type);
-CREATE INDEX idx_events_correlation_id ON public.events(correlation_id);
+CREATE INDEX IF NOT EXISTS idx_events_user_id ON public.events(user_id);
+CREATE INDEX IF NOT EXISTS idx_events_event_type ON public.events(event_type);
+CREATE INDEX IF NOT EXISTS idx_events_correlation_id ON public.events(correlation_id);
 
 -- ═══════════════════════════════════════════════════
 -- 2. Job Queue (Postgres-backed via SKIP LOCKED)
 -- ═══════════════════════════════════════════════════
 
+DROP TABLE IF EXISTS public.jobs CASCADE;
 CREATE TABLE IF NOT EXISTS public.jobs (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   queue_name TEXT NOT NULL, -- e.g., 'ai_worker', 'sync_worker', 'notification_worker'
@@ -88,6 +90,7 @@ CREATE INDEX idx_workflow_state_status ON public.workflow_state(status);
 -- 4. Approval Policies Engine
 -- ═══════════════════════════════════════════════════
 
+DROP TABLE IF EXISTS public.approval_policies CASCADE;
 CREATE TABLE IF NOT EXISTS public.approval_policies (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   user_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE NOT NULL,
@@ -109,6 +112,7 @@ CREATE POLICY "Users can manage their approval policies"
 -- 5. System Observability Metrics
 -- ═══════════════════════════════════════════════════
 
+DROP TABLE IF EXISTS public.system_metrics CASCADE;
 CREATE TABLE IF NOT EXISTS public.system_metrics (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   metric_name TEXT NOT NULL,

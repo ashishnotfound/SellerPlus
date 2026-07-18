@@ -31,15 +31,17 @@ export function LLMSettings() {
         setConfigs(newConfigs);
       }
     }
-    if (user?.isSuperAdmin) {
+    if (user?.id) {
       fetchConfigs();
     }
   }, [user]);
 
   const handleSave = async () => {
     try {
+      if (!user?.id) throw new Error("Not authenticated");
       const configToSave = configs[activeTab];
       const payload = {
+        user_id: user.id,
         provider: configToSave.provider,
         api_key: configToSave.api_key,
         model_name: configToSave.model_name,
@@ -48,7 +50,7 @@ export function LLMSettings() {
 
       const { error } = await supabase
         .from("llm_settings")
-        .upsert(payload, { onConflict: "provider" });
+        .upsert(payload, { onConflict: "user_id,provider" });
 
       if (error) throw error;
       useToastStore.getState().success("Saved", `${activeTab.toUpperCase()} configuration saved.`);
@@ -57,17 +59,12 @@ export function LLMSettings() {
     }
   };
 
-  if (!user?.isSuperAdmin) return null;
-
   return (
     <GlassCard>
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-2.5">
           <Bot className="w-5 h-5 text-indigo-400" />
           <h3 className="text-lg font-bold text-white">AI Gateway Models</h3>
-        </div>
-        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs font-bold">
-          <Shield className="w-3.5 h-3.5" /> Super Admin Only
         </div>
       </div>
 

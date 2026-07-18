@@ -76,9 +76,6 @@ export async function POST(request: Request) {
   try {
     const body = await request.json();
     const {
-      clientId,
-      clientSecret,
-      refreshToken,
       region,
       sandbox,
       userId: bodyUserId,
@@ -88,9 +85,29 @@ export async function POST(request: Request) {
     // Authenticate: JWT in production, body userId in development
     const { userId, supabaseAdmin } = await authenticateWithDevFallback(request, bodyUserId);
 
+    // Get Amazon developer credentials
+    const { data: devCreds } = await supabaseAdmin
+      .from("amazon_developer_credentials")
+      .select("*")
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    const clientId = devCreds?.sp_client_id || process.env.NEXT_PUBLIC_AMAZON_SP_CLIENT_ID;
+    const clientSecret = devCreds?.sp_client_secret || process.env.AMAZON_SP_CLIENT_SECRET;
+
+    // Get user's refresh token
+    const { data: userToken } = await supabaseAdmin
+      .from("amazon_user_tokens")
+      .select("refresh_token")
+      .eq("supabase_user_id", userId)
+      .eq("provider", "sp")
+      .maybeSingle();
+      
+    const refreshToken = userToken?.refresh_token;
+
     if (!clientId || !clientSecret || !refreshToken) {
       return NextResponse.json(
-        { error: "Missing required Amazon credentials (clientId, clientSecret, refreshToken)." },
+        { error: "Missing required Amazon credentials (Client ID, Client Secret, or Refresh Token)." },
         { status: 400 }
       );
     }

@@ -111,14 +111,18 @@ export const useSubscription = create<SubscriptionState>((set, get) => ({
    * falls back to local mapping during initial load.
    */
   isFeatureGated: (feature: string) => {
-    const { synced, featureAccess } = get();
+    const { synced, featureAccess, currentPlan } = get();
 
-    if (!synced) {
-      return true; // Strictly deny access until synced from server
+    // If server has synced, use the authoritative feature access map
+    if (synced && feature in featureAccess) {
+      return !featureAccess[feature];
     }
 
-    if (feature in featureAccess) {
-      return !featureAccess[feature];
+    // Fallback: use local plan-based gating while sync is pending
+    // This prevents a flash of "upgrade required" for paid users on load
+    const fallbackAllowed = GATED_FEATURES_FALLBACK[feature];
+    if (fallbackAllowed) {
+      return !fallbackAllowed.includes(currentPlan);
     }
 
     return false;

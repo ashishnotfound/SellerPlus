@@ -2,6 +2,7 @@
 -- Description: Sets up centralized system logging, telemetry metrics, and expanded heartbeat tracking
 
 -- 1. Create system_logs table
+DROP TABLE IF EXISTS public.system_logs;
 CREATE TABLE IF NOT EXISTS public.system_logs (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   level text NOT NULL CHECK (level IN ('TRACE', 'DEBUG', 'INFO', 'WARN', 'ERROR', 'FATAL')),

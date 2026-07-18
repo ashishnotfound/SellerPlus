@@ -1,9 +1,10 @@
 -- Migration for AI Knowledge Center and versioning
 -- Matches Master Constitution §3.7 and §3.8
 
+DROP TABLE IF EXISTS public.ai_knowledge_center CASCADE;
 CREATE TABLE public.ai_knowledge_center (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
     title TEXT NOT NULL,
     description TEXT NOT NULL,
     evidence TEXT[] DEFAULT '{}',

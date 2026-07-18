@@ -32,17 +32,24 @@ export async function GET(req: Request) {
     }
 
     // Prepare credentials for token exchange
+    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
+    const { data: customCreds } = await supabaseAdmin
+      .from("amazon_developer_credentials")
+      .select("*")
+      .eq("user_id", user.userId)
+      .maybeSingle();
+
     const clientId = provider === "sp" 
-      ? process.env.NEXT_PUBLIC_AMAZON_SP_CLIENT_ID 
-      : process.env.NEXT_PUBLIC_AMAZON_ADS_CLIENT_ID;
+      ? (customCreds?.sp_client_id || process.env.NEXT_PUBLIC_AMAZON_SP_CLIENT_ID)
+      : (customCreds?.ads_client_id || process.env.NEXT_PUBLIC_AMAZON_ADS_CLIENT_ID);
       
     const clientSecret = provider === "sp"
-      ? process.env.AMAZON_SP_CLIENT_SECRET
-      : process.env.AMAZON_ADS_CLIENT_SECRET;
+      ? (customCreds?.sp_client_secret || process.env.AMAZON_SP_CLIENT_SECRET)
+      : (customCreds?.ads_client_secret || process.env.AMAZON_ADS_CLIENT_SECRET);
 
-    const redirectUri = process.env.NEXT_PUBLIC_AMAZON_OAUTH_REDIRECT_URI;
+    const redirectUri = process.env.NEXT_PUBLIC_AMAZON_OAUTH_REDIRECT_URI || `${new URL(req.url).origin}/api/amazon/callback`;
 
-    if (!clientId || !clientSecret || !redirectUri) {
+    if (!clientId || !clientSecret) {
       log.error(`[API/Amazon] Missing environment credentials for provider ${provider}`);
       return NextResponse.redirect(new URL(`/settings?amazon_error=Server_misconfigured`, req.url));
     }
@@ -68,7 +75,6 @@ export async function GET(req: Request) {
     }
 
     // Save tokens in Supabase using the service role to bypass RLS for inserts
-    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
     
     // Calculate expiration timestamp
     const expiresInSecs = tokenData.expires_in || 3600;

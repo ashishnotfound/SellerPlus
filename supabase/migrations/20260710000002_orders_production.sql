@@ -39,7 +39,10 @@ CREATE TABLE IF NOT EXISTS public.order_items (
   created_at TIMESTAMPTZ DEFAULT now() NOT NULL
 );
 
--- 5. Add unique constraint on order_items to prevent duplicates
+-- 5a. Add amazon_order_item_id column if not present (idempotent)
+ALTER TABLE public.order_items ADD COLUMN IF NOT EXISTS amazon_order_item_id TEXT;
+
+-- 5b. Add unique constraint on order_items to prevent duplicates
 DO $$ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint WHERE conname = 'order_items_unique_item'

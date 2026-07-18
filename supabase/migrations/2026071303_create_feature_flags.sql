@@ -1,7 +1,9 @@
 -- PostgreSQL Migration: 20260713_create_feature_flags.sql
 -- Description: Centralized Feature Flags and Overrides for experimental rollouts
 
--- 1. Create feature_flags table
+-- 1. Create feature_flags table (drop old version if it exists from full_schema)
+DROP TABLE IF EXISTS public.feature_flag_overrides;
+DROP TABLE IF EXISTS public.feature_flags;
 CREATE TABLE IF NOT EXISTS public.feature_flags (
   key text PRIMARY KEY,
   description text,

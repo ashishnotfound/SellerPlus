@@ -50,23 +50,31 @@ export async function GET(request: Request) {
     const status = subscription?.status || "active";
     const limits = PLAN_LIMITS[plan] || PLAN_LIMITS.free;
 
-    // 2. Count current period AI usage
+    // 2. Count current period AI usage (graceful fallback if table missing)
     const periodStart = subscription?.current_period_start
       ? new Date(subscription.current_period_start).toISOString()
       : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
-    const { count: generationsCount } = await supabaseAdmin
-      .from("ai_generations")
-      .select("id", { count: "exact", head: true })
-      .eq("user_id", userId)
-      .gte("created_at", periodStart);
+    let generationsCount = 0;
+    let auditsCount = 0;
+    try {
+      const { count: gc } = await supabaseAdmin
+        .from("ai_generations")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", userId)
+        .gte("created_at", periodStart);
+      generationsCount = gc || 0;
 
-    const { count: auditsCount } = await supabaseAdmin
-      .from("ai_generations")
-      .select("id", { count: "exact", head: true })
-      .eq("user_id", userId)
-      .eq("generation_type", "judge")
-      .gte("created_at", periodStart);
+      const { count: ac } = await supabaseAdmin
+        .from("ai_generations")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", userId)
+        .eq("generation_type", "judge")
+        .gte("created_at", periodStart);
+      auditsCount = ac || 0;
+    } catch (_usageErr) {
+      // ai_generations table may not exist yet — usage counts default to 0
+    }
 
     // 3. Build feature access map
     const featureAccess: Record<string, boolean> = {};

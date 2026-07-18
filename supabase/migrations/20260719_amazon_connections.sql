@@ -9,6 +9,7 @@
 -- ===================================================================
 
 -- ─── Amazon Connections Table ───────────────────────────────────────
+DROP TABLE IF EXISTS public.amazon_connections CASCADE;
 CREATE TABLE IF NOT EXISTS public.amazon_connections (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id       UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,

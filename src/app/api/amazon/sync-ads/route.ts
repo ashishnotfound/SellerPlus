@@ -91,25 +91,31 @@ export async function POST(request: Request) {
     const { userId, supabaseAdmin } = await authenticateWithDevFallback(request, bodyUserId);
 
     // Fetch credentials from DB securely
-    const { data: connection, error: connError } = await supabaseAdmin
-      .from("amazon_connections")
+    const { data: devCreds } = await supabaseAdmin
+      .from("amazon_developer_credentials")
       .select("*")
       .eq("user_id", userId)
-      .eq("is_active", true)
       .maybeSingle();
 
-    if (connError || !connection) {
-      return NextResponse.json({ error: "No active Amazon connection found. Please configure in Settings or Ads Dashboard." }, { status: 400 });
+    const clientId = devCreds?.ads_client_id || process.env.NEXT_PUBLIC_AMAZON_ADS_CLIENT_ID;
+    const clientSecret = devCreds?.ads_client_secret || process.env.AMAZON_ADS_CLIENT_SECRET;
+
+    const { data: userToken, error: connError } = await supabaseAdmin
+      .from("amazon_user_tokens")
+      .select("refresh_token")
+      .eq("supabase_user_id", userId)
+      .eq("provider", "ads")
+      .maybeSingle();
+
+    if (connError || !userToken) {
+      return NextResponse.json({ error: "No active Amazon Ads connection found. Please configure in Settings." }, { status: 400 });
     }
 
-    const { decryptToken } = await import("@/lib/encryption");
-    const clientId = decryptToken(connection.client_id);
-    const clientSecret = decryptToken(connection.client_secret);
-    const refreshToken = decryptToken(connection.refresh_token);
+    const refreshToken = userToken.refresh_token;
 
     if (!clientId || !clientSecret || !refreshToken) {
       return NextResponse.json(
-        { error: "Corrupted Amazon credentials in database." },
+        { error: "Missing required Amazon Ads credentials (Client ID, Client Secret, or Refresh Token)." },
         { status: 500 }
       );
     }

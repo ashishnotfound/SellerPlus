@@ -60,6 +60,21 @@ CREATE POLICY "Users can manage their automation preferences"
 DO $$ 
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+    WHERE table_name = 'alert_logs' AND column_name = 'type') THEN
+    ALTER TABLE public.alert_logs ADD COLUMN type TEXT DEFAULT 'general';
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+    WHERE table_name = 'alert_logs' AND column_name = 'title') THEN
+    ALTER TABLE public.alert_logs ADD COLUMN title TEXT DEFAULT 'Alert';
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+    WHERE table_name = 'alert_logs' AND column_name = 'message') THEN
+    ALTER TABLE public.alert_logs ADD COLUMN message TEXT DEFAULT '';
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
     WHERE table_name = 'alert_logs' AND column_name = 'severity') THEN
     ALTER TABLE public.alert_logs ADD COLUMN severity TEXT DEFAULT 'info';
   END IF;

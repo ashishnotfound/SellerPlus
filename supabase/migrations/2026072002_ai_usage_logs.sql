@@ -1,9 +1,10 @@
 -- Migration for AI Usage Logs
 
+DROP TABLE IF EXISTS public.ai_usage_logs CASCADE;
 CREATE TABLE public.ai_usage_logs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
-    provider TEXT NOT NULL CHECK (provider IN ('xAI', 'Anthropic', 'OpenAI')),
+    user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL CHECK (provider IN ('xAI', 'Anthropic', 'OpenAI', 'Google')),
     model TEXT NOT NULL,
     prompt_tokens INTEGER NOT NULL DEFAULT 0,
     completion_tokens INTEGER NOT NULL DEFAULT 0,
