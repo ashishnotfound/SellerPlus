@@ -316,6 +316,9 @@ export function AmazonAPISettings() {
     
     setConnecting(provider);
     const url = buildOAuthUrl(provider, customId);
+    
+    console.log(`[AmazonOAuth] Final Redirect URL: \n${url}`);
+    
     window.location.href = url;
   };
 
