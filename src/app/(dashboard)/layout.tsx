@@ -9,6 +9,9 @@ import { Sidebar } from "@/components/sidebar";
 import { CommandPalette } from "@/components/command-palette";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { ToastContainer } from "@/components/toast-container";
+import { MobileNav } from "@/components/mobile-nav";
+import { FloatingAI } from "@/components/floating-ai";
+import { FeedbackWidget } from "@/components/feedback-widget";
 import { useKeyboardShortcut } from "@/hooks/use-keyboard-shortcut";
 import { useAnalyticsStore } from "@/hooks/use-analytics-store";
 import { useListingsStore } from "@/hooks/use-listings-store";
@@ -128,7 +131,7 @@ export default function DashboardLayout({
       />
 
       {/* Main content */}
-      <main className="flex-1 flex flex-col overflow-y-auto max-h-screen">
+      <main className="flex-1 flex flex-col overflow-y-auto max-h-screen pb-16 md:pb-0">
         {/* Mobile top spacer — clears the hamburger button */}
         <div className="h-14 md:hidden shrink-0" />
         {/* Impersonation Banner */}
@@ -176,6 +179,11 @@ export default function DashboardLayout({
 
       {/* Toast Notifications */}
       <ToastContainer />
+
+      {/* Mobile Extras */}
+      <MobileNav />
+      <FloatingAI />
+      <FeedbackWidget />
     </div>
   );
 }

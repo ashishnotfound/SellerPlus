@@ -1,11 +1,12 @@
 "use client";
 
-import React, { useState } from "react";
+import React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { useSubscription } from "@/hooks/use-subscription";
 import { useAuth } from "@/hooks/use-auth";
+import { useMobileNav } from "@/hooks/use-mobile-nav";
 import { NotificationBell } from "@/components/notification-bell";
 import {
   BarChart2,
@@ -232,7 +233,7 @@ function SidebarContent({
 export function Sidebar({ userEmail = "seller@sellerplus.in", userRole = "Owner", onLogout }: SidebarProps) {
   const currentPlan = useSubscription((s) => s.currentPlan);
   const user = useAuth((s) => s.user);
-  const [mobileOpen, setMobileOpen] = useState(false);
+  const { isMobileDrawerOpen, setMobileDrawerOpen } = useMobileNav();
 
   const sharedProps = {
     userEmail,
@@ -252,7 +253,7 @@ export function Sidebar({ userEmail = "seller@sellerplus.in", userRole = "Owner"
       {/* ── Mobile: hamburger trigger (always visible) ────────── */}
       <div className="md:hidden fixed top-3 left-3 z-50">
         <button
-          onClick={() => setMobileOpen(true)}
+          onClick={() => setMobileDrawerOpen(true)}
           className="w-9 h-9 flex items-center justify-center rounded-xl bg-[#0d0e10] border border-white/[0.08] text-zinc-400 hover:text-white transition-colors shadow-lg"
           aria-label="Open navigation"
         >
@@ -261,16 +262,16 @@ export function Sidebar({ userEmail = "seller@sellerplus.in", userRole = "Owner"
       </div>
 
       {/* ── Mobile: slide-in drawer ───────────────────────────── */}
-      {mobileOpen && (
+      {isMobileDrawerOpen && (
         <>
           {/* Backdrop */}
           <div
             className="md:hidden fixed inset-0 z-40 bg-black/60 backdrop-blur-sm"
-            onClick={() => setMobileOpen(false)}
+            onClick={() => setMobileDrawerOpen(false)}
           />
           {/* Drawer */}
           <aside className="md:hidden fixed top-0 left-0 z-50 w-[220px] h-screen bg-[#0d0e10] border-r border-white/[0.06] flex flex-col shadow-2xl animate-in slide-in-from-left duration-200">
-            <SidebarContent {...sharedProps} onClose={() => setMobileOpen(false)} />
+            <SidebarContent {...sharedProps} onClose={() => setMobileDrawerOpen(false)} />
           </aside>
         </>
       )}

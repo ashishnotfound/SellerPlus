@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { useToastStore } from "@/hooks/use-toast-store";
+import { useOfflineQueue } from "@/hooks/use-offline-queue";
 import {
   Package, PackageCheck, Truck, Printer, RefreshCw, ChevronRight,
   Clipboard, User, MapPin, StickyNote, Hash, AlertTriangle, X,
@@ -284,6 +285,8 @@ export default function WarehousePage() {
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [updatingIds, setUpdatingIds] = useState<Set<string>>(new Set());
+  
+  const { isOffline, queueCount, enqueueAction } = useOfflineQueue();
 
   const fetchOrders = useCallback(async (isRefresh = false) => {
     if (!user) return;
@@ -316,6 +319,15 @@ export default function WarehousePage() {
     newStatus: "packed" | "shipped",
     note?: string
   ) => {
+    if (isOffline) {
+      enqueueAction("pack_order", { orderId, status: newStatus, note });
+      // Optimistically update
+      setOrders((prev) =>
+        prev.map((o) => (o.id === orderId ? { ...o, status: newStatus } : o))
+      );
+      return;
+    }
+
     setUpdatingIds((prev) => new Set(prev).add(orderId));
     try {
       const res = await fetch(`/api/warehouse/${orderId}/status`, {
@@ -363,8 +375,19 @@ export default function WarehousePage() {
       {/* Header */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold text-white tracking-tight">Warehouse Portal</h1>
-          <p className="text-white/50 text-sm mt-1">Pack and ship orders efficiently.</p>
+          <h1 className="text-2xl font-bold text-white tracking-tight flex items-center gap-2">
+            Warehouse Portal
+            {isOffline && (
+              <span className="text-[10px] uppercase font-bold tracking-widest bg-rose-500/10 text-rose-400 border border-rose-500/20 px-2 py-0.5 rounded-full flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" />
+                Offline Mode
+              </span>
+            )}
+          </h1>
+          <p className="text-white/50 text-sm mt-1">
+            Pack and ship orders efficiently.
+            {queueCount > 0 && <span className="text-amber-400 ml-1">({queueCount} offline actions pending sync)</span>}
+          </p>
         </div>
         <button
           onClick={() => fetchOrders(true)}

@@ -155,7 +155,7 @@ async function handleFindKeywords(ctx: JobContext): Promise<JobHandlerResult> {
   const category = ctx.payload?.category || "General";
   const competitors = ctx.payload?.competitors || "Top ranking competitors";
 
-  const result = await generateKeywords(productName, category, competitors, ctx.userId);
+  const result = await generateKeywords(productName as string, category as string, competitors as string, ctx.userId);
   
   return {
     output: { keywords: result } as unknown as Record<string, unknown>,

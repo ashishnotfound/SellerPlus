@@ -82,9 +82,6 @@ export async function POST(request: Request) {
   try {
     const body = await request.json();
     const {
-      clientId,
-      clientSecret,
-      refreshToken,
       profileId: bodyProfileId,
       region,
       userId: bodyUserId,
@@ -93,10 +90,27 @@ export async function POST(request: Request) {
     // Authenticate: JWT in production, body userId in development
     const { userId, supabaseAdmin } = await authenticateWithDevFallback(request, bodyUserId);
 
+    // Fetch credentials from DB securely
+    const { data: connection, error: connError } = await supabaseAdmin
+      .from("amazon_connections")
+      .select("*")
+      .eq("user_id", userId)
+      .eq("is_active", true)
+      .maybeSingle();
+
+    if (connError || !connection) {
+      return NextResponse.json({ error: "No active Amazon connection found. Please configure in Settings or Ads Dashboard." }, { status: 400 });
+    }
+
+    const { decryptToken } = await import("@/lib/encryption");
+    const clientId = decryptToken(connection.client_id);
+    const clientSecret = decryptToken(connection.client_secret);
+    const refreshToken = decryptToken(connection.refresh_token);
+
     if (!clientId || !clientSecret || !refreshToken) {
       return NextResponse.json(
-        { error: "Missing required Amazon credentials (clientId, clientSecret, refreshToken)." },
-        { status: 400 }
+        { error: "Corrupted Amazon credentials in database." },
+        { status: 500 }
       );
     }
 

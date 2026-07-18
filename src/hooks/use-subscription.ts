@@ -62,7 +62,6 @@ const GATED_FEATURES_FALLBACK: Record<string, PlanId[]> = {
 };
 
 const isBrowser = typeof window !== "undefined";
-const CACHE_KEY = "sp_subscription_cache";
 
 export const useSubscription = create<SubscriptionState>((set, get) => ({
   currentPlan: "free",
@@ -94,14 +93,6 @@ export const useSubscription = create<SubscriptionState>((set, get) => ({
         maxAudits: limits.maxAudits,
       },
     });
-    // Persist optimistic update, then re-sync
-    if (isBrowser) {
-      const state = get();
-      localStorage.setItem(CACHE_KEY, JSON.stringify({
-        currentPlan: state.currentPlan,
-        usageThisPeriod: state.usageThisPeriod,
-      }));
-    }
   },
 
   incrementUsage: (type) => {
@@ -110,12 +101,6 @@ export const useSubscription = create<SubscriptionState>((set, get) => ({
         ...state.usageThisPeriod,
         [type]: state.usageThisPeriod[type] + 1,
       };
-      if (isBrowser) {
-        localStorage.setItem(CACHE_KEY, JSON.stringify({
-          currentPlan: state.currentPlan,
-          usageThisPeriod: updatedUsage,
-        }));
-      }
       return { usageThisPeriod: updatedUsage };
     });
   },
@@ -129,7 +114,7 @@ export const useSubscription = create<SubscriptionState>((set, get) => ({
     const { synced, featureAccess } = get();
 
     if (!synced) {
-      return !!GATED_FEATURES_FALLBACK[feature];
+      return true; // Strictly deny access until synced from server
     }
 
     if (feature in featureAccess) {
@@ -154,24 +139,6 @@ export const useSubscription = create<SubscriptionState>((set, get) => ({
    * If server fetch fails (offline, dev mode), cached state persists.
    */
   loadSubscription: () => {
-    // Step 1: Load cache for instant display
-    if (isBrowser) {
-      const cached = localStorage.getItem(CACHE_KEY);
-      if (cached) {
-        try {
-          const parsed = JSON.parse(cached);
-          if (parsed?.currentPlan) {
-            set({
-              currentPlan: parsed.currentPlan,
-              usageThisPeriod: parsed.usageThisPeriod || get().usageThisPeriod,
-            });
-          }
-        } catch {
-          // Corrupted cache — ignore
-        }
-      }
-    }
-
     // Step 2: Sync from server (non-blocking)
     if (isBrowser) {
       supabase.auth.getSession().then(({ data: { session } }: any) => {
@@ -206,12 +173,6 @@ export const useSubscription = create<SubscriptionState>((set, get) => ({
           };
 
           set(serverState);
-
-          // Update cache with server truth
-          localStorage.setItem(CACHE_KEY, JSON.stringify({
-            currentPlan: serverState.currentPlan,
-            usageThisPeriod: serverState.usageThisPeriod,
-          }));
         })
         .catch((err) => {
           console.warn("[Subscription] Server sync failed, using cached state:", err.message);

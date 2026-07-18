@@ -1,5 +1,5 @@
 // Trigger rebuild to pick up new environment variables on Vercel
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { Providers } from "@/components/providers";
@@ -9,12 +9,27 @@ const inter = Inter({
   variable: "--font-sans",
 });
 
+export const viewport: Viewport = {
+  themeColor: "#0d0e10",
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+};
+
 export const metadata: Metadata = {
   title: "SellerPlus - AI Commerce Operating System for Modern Sellers",
   description: "Manage Amazon, Flipkart, Meesho, and Shopify with real-time analytics, AI Listing Judges, keyword intelligence, and warehouse sync.",
+  manifest: "/manifest.json",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "default",
+    title: "SellerPlus",
+  },
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",
+    apple: "/android-chrome-192x192.png",
   },
 };
 

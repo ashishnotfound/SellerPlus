@@ -52,7 +52,6 @@ export const useAuth = create<AuthStore>((set) => ({
             isSuspended: profile?.is_suspended || false,
             isAuthenticated: true,
           };
-          localStorage.setItem("sp_auth_user", JSON.stringify(uSession));
           set({ user: uSession, loading: false });
           return true;
         } else if (error) {
@@ -81,7 +80,6 @@ export const useAuth = create<AuthStore>((set) => ({
       isSuspended: false,
       isAuthenticated: true,
     };
-    localStorage.setItem("sp_auth_user", JSON.stringify(uSession));
     set({ user: uSession, loading: false });
     return true;
   },
@@ -106,7 +104,6 @@ export const useAuth = create<AuthStore>((set) => ({
             isSuspended: false,
             isAuthenticated: true,
           };
-          localStorage.setItem("sp_auth_user", JSON.stringify(uSession));
           set({ user: uSession, loading: false });
           return true;
         } else if (error) {
@@ -134,13 +131,11 @@ export const useAuth = create<AuthStore>((set) => ({
       isSuspended: false,
       isAuthenticated: true,
     };
-    localStorage.setItem("sp_auth_user", JSON.stringify(uSession));
     set({ user: uSession, loading: false });
     return true;
   },
 
   logout: () => {
-    localStorage.removeItem("sp_auth_user");
     localStorage.removeItem("sp_real_admin");
     try {
       supabase.auth.signOut();
@@ -173,7 +168,6 @@ export const useAuth = create<AuthStore>((set) => ({
             isSuspended: profile?.is_suspended || false,
             isAuthenticated: true,
           };
-          localStorage.setItem("sp_auth_user", JSON.stringify(uSession));
           set({ user: uSession, loading: false });
           return;
         }
@@ -181,15 +175,6 @@ export const useAuth = create<AuthStore>((set) => ({
         console.warn("[useAuth] Supabase getSession failed, falling back to localStorage:", e);
       }
 
-      // 2. Fallback: use the cached localStorage session
-      const stored = localStorage.getItem("sp_auth_user");
-      if (stored) {
-        try {
-          const parsed = JSON.parse(stored);
-          set({ user: parsed, loading: false });
-          return;
-        } catch (_) {}
-      }
       set({ user: null, loading: false });
     }
   },
@@ -211,7 +196,6 @@ export const useAuth = create<AuthStore>((set) => ({
         isSuperAdmin: false // Don't carry admin privileges to the impersonated context
       };
       
-      localStorage.setItem("sp_auth_user", JSON.stringify(impersonatedSession));
       return { user: impersonatedSession };
     });
   },
@@ -222,7 +206,6 @@ export const useAuth = create<AuthStore>((set) => ({
       if (storedAdmin) {
         const originalAdmin = JSON.parse(storedAdmin) as UserSession;
         localStorage.removeItem("sp_real_admin");
-        localStorage.setItem("sp_auth_user", JSON.stringify(originalAdmin));
         return { user: originalAdmin };
       }
       return {};

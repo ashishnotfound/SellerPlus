@@ -5,12 +5,33 @@ import { authenticateWithDevFallback, authErrorResponse } from "@/lib/auth-middl
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { action, reportId, reportDocumentId, clientId, clientSecret, sellerId, refreshToken, region, sandbox, userId: bodyUserId } = body;
+    const { action, reportId, reportDocumentId, userId: bodyUserId } = body;
 
-    const { userId } = await authenticateWithDevFallback(request, bodyUserId);
+    const { userId, supabaseAdmin } = await authenticateWithDevFallback(request, bodyUserId);
+
+    // Fetch credentials from DB securely
+    const { data: connection, error: connError } = await supabaseAdmin
+      .from("amazon_connections")
+      .select("*")
+      .eq("user_id", userId)
+      .eq("is_active", true)
+      .maybeSingle();
+
+    if (connError || !connection) {
+      return NextResponse.json({ error: "No active Amazon connection found. Please connect your Amazon account in Settings." }, { status: 400 });
+    }
+
+    const { decryptToken } = await import("@/lib/encryption");
+    const clientId = decryptToken(connection.client_id);
+    const clientSecret = decryptToken(connection.client_secret);
+    const refreshToken = decryptToken(connection.refresh_token);
+    const sellerId = connection.seller_id;
+    const marketplaceId = connection.marketplace_id;
+    const region = connection.marketplace; // Using this to map to the correct SP-API url below
+    const sandbox = connection.is_sandbox;
 
     if (!clientId || !clientSecret || !refreshToken) {
-      return NextResponse.json({ error: "Missing required auth credentials (Client ID, Client Secret, Refresh Token)" }, { status: 400 });
+      return NextResponse.json({ error: "Corrupted Amazon credentials in database." }, { status: 500 });
     }
 
     // 1. Exchange refresh token for LWA Access Token
@@ -38,18 +59,18 @@ export async function POST(request: Request) {
 
     // 2. Resolve regional Selling Partner API endpoint and Marketplace ID
     let spApiUrl = "https://sellingpartnerapi-eu.amazon.com"; // default to EU / India
-    let marketplaceId = "A21TJRUUN4KGV"; // default to India (amazon.in)
+    let activeMarketplaceId = marketplaceId || "A21TJRUUN4KGV"; // default to India (amazon.in)
 
     const normRegion = (region || "").toLowerCase();
     if (normRegion.includes("us") || normRegion.includes("north america") || normRegion.includes("com")) {
       spApiUrl = "https://sellingpartnerapi-na.amazon.com";
-      marketplaceId = "ATVPDKIKX0DER";
+      activeMarketplaceId = marketplaceId || "ATVPDKIKX0DER";
     } else if (normRegion.includes("europe") || normRegion.includes("co.uk") || normRegion.includes("uk")) {
       spApiUrl = "https://sellingpartnerapi-eu.amazon.com";
-      marketplaceId = "A1F83G8C2ARO7P"; // UK
+      activeMarketplaceId = marketplaceId || "A1F83G8C2ARO7P"; // UK
     } else if (normRegion.includes("far east") || normRegion.includes("japan") || normRegion.includes("jp")) {
       spApiUrl = "https://sellingpartnerapi-fe.amazon.com";
-      marketplaceId = "A1VC38T7YXB528"; // Japan
+      activeMarketplaceId = marketplaceId || "A1VC38T7YXB528"; // Japan
     }
 
     if (sandbox) {
@@ -265,7 +286,7 @@ export async function POST(request: Request) {
       },
       body: JSON.stringify({
         reportType: "GET_MERCHANT_LISTINGS_ALL_DATA",
-        marketplaceIds: [marketplaceId]
+        marketplaceIds: [activeMarketplaceId]
       })
     });
 

@@ -20,7 +20,9 @@ export interface EnqueuedJob<T = Record<string, unknown>> {
   /** Serializable job payload */
   payload: T;
   /** The user this job belongs to */
-  userId: string;
+  userId?: string;
+  /** The workspace this job belongs to */
+  workspaceId?: string;
   /** Lower number = processed first. Default 5. */
   priority?: number;
   /** Override default max retry attempts. Default 3. */
@@ -52,9 +54,10 @@ export class SupabaseJobService implements JobService {
     const adminClient = getAdminClient();
 
     const { data, error } = await adminClient
-      .from("bi_jobs")
+      .from("jobs")
       .insert({
         user_id: job.userId,
+        workspace_id: job.workspaceId,
         job_type: job.type,
         payload: {
           ...(job.payload as Record<string, unknown>),
@@ -63,7 +66,8 @@ export class SupabaseJobService implements JobService {
         },
         priority: job.priority ?? 5,
         max_attempts: job.maxAttempts ?? 3,
-        status: "queued",
+        status: "pending", // Unified queue uses 'pending' instead of 'queued'
+        schedule_id: job.scheduleId,
       })
       .select("id")
       .single();
@@ -79,7 +83,7 @@ export class SupabaseJobService implements JobService {
       type: job.type,
     });
 
-    return { jobId: data.id, status: "queued" };
+    return { jobId: data.id, status: "pending" };
   }
 
   /**
@@ -89,7 +93,7 @@ export class SupabaseJobService implements JobService {
     const adminClient = getAdminClient();
 
     const { data } = await adminClient
-      .from("bi_jobs")
+      .from("jobs")
       .select("status")
       .eq("id", jobId)
       .maybeSingle();

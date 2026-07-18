@@ -4,16 +4,35 @@ import { authenticateWithDevFallback, authErrorResponse } from "@/lib/auth-middl
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { asin, clientId, clientSecret, refreshToken, region, sandbox, userId: bodyUserId } = body;
+    const { asin, userId: bodyUserId } = body;
 
-    const { userId } = await authenticateWithDevFallback(request, bodyUserId);
+    const { userId, supabaseAdmin } = await authenticateWithDevFallback(request, bodyUserId);
 
     if (!asin) {
       return NextResponse.json({ error: "ASIN is required" }, { status: 400 });
     }
 
+    // Fetch credentials from DB securely
+    const { data: connection, error: connError } = await supabaseAdmin
+      .from("amazon_connections")
+      .select("*")
+      .eq("user_id", userId)
+      .eq("is_active", true)
+      .maybeSingle();
+
+    if (connError || !connection) {
+      return NextResponse.json({ error: "No active Amazon connection found. Please connect your Amazon account in Settings." }, { status: 400 });
+    }
+
+    const { decryptToken } = await import("@/lib/encryption");
+    const clientId = decryptToken(connection.client_id);
+    const clientSecret = decryptToken(connection.client_secret);
+    const refreshToken = decryptToken(connection.refresh_token);
+    const region = connection.marketplace;
+    const sandbox = connection.is_sandbox;
+
     if (!clientId || !clientSecret || !refreshToken) {
-      return NextResponse.json({ error: "Missing required Amazon Selling Partner credentials in Settings." }, { status: 400 });
+      return NextResponse.json({ error: "Corrupted Amazon credentials in database." }, { status: 500 });
     }
 
     // 1. Exchange refresh token for LWA Access Token

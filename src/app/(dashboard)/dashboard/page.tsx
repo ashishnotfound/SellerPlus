@@ -20,6 +20,7 @@ import {
   AlertCircle,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
+import { RadarResponse } from "@/lib/ai/schemas";
 
 // ─── Dashboard Loading State ──────────────────────────────────────────
 
@@ -160,11 +161,31 @@ export default function DashboardPage() {
         }),
       });
       if (!res.ok) throw new Error("Failed to load AI Business Intelligence");
-      return res.json() as Promise<{
+      
+      const { data: { session: s2 } } = await supabase.auth.getSession();
+      const headers = { ...(s2?.access_token ? { Authorization: `Bearer ${s2.access_token}` } : {}) };
+
+      const [riskRes, oppRes] = await Promise.all([
+        fetch("/api/ai/risks", { headers }).catch(() => null),
+        fetch("/api/ai/opportunities", { headers }).catch(() => null)
+      ]);
+
+      const [riskData, oppData] = await Promise.all([
+        riskRes?.ok ? riskRes.json() : null,
+        oppRes?.ok ? oppRes.json() : null
+      ]);
+
+      const bi = await res.json() as {
         summary: string;
         widgets: Widget[];
         recommendations: ExplainableRecommendation[];
-      }>;
+      };
+
+      return {
+        ...bi,
+        risks: riskData?.data as RadarResponse | undefined,
+        opportunities: oppData?.data as RadarResponse | undefined
+      };
     },
     enabled: !!user?.id,
     staleTime: 1000 * 60 * 5, // 5 minutes cache
@@ -178,7 +199,31 @@ export default function DashboardPage() {
   }
 
   const kpiWidgets = biData.widgets.filter((w) => w.type === "KPI");
-  const chartWidgets = biData.widgets.filter((w) => w.type !== "KPI");
+  let chartWidgets = biData.widgets.filter((w) => w.type !== "KPI");
+
+  // Adaptive Layout: Reorder chart widgets based on identified critical/high risks
+  if (biData.risks && biData.risks.items.length > 0) {
+    const highRisks = biData.risks.items.filter(r => r.severityOrImpact === "Critical" || r.severityOrImpact === "High");
+    const riskKeywords = highRisks.flatMap(r => r.title.toLowerCase().split(" "));
+    
+    chartWidgets = chartWidgets.sort((a, b) => {
+      let aScore = a.importance === "High" ? 10 : 0;
+      let bScore = b.importance === "High" ? 10 : 0;
+      
+      const aText = (a.title + " " + (a.description || "")).toLowerCase();
+      const bText = (b.title + " " + (b.description || "")).toLowerCase();
+      
+      riskKeywords.forEach(kw => {
+        if (kw.length > 3 && aText.includes(kw)) aScore += 5;
+        if (kw.length > 3 && bText.includes(kw)) bScore += 5;
+      });
+      
+      return bScore - aScore;
+    });
+  } else {
+    // Default sorting
+    chartWidgets = chartWidgets.sort((a, b) => (a.importance === "High" ? -1 : b.importance === "High" ? 1 : 0));
+  }
 
   const lastUpdated = dataUpdatedAt
     ? new Date(dataUpdatedAt).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })
@@ -241,6 +286,21 @@ export default function DashboardPage() {
             aiChatUsed: aiChatUsed,
           }}
         />
+      )}
+
+      {/* Radar Alerts */}
+      {(biData.risks?.items.length || 0) > 0 && (
+        <div className="flex flex-col gap-3">
+          {biData.risks?.items.filter(r => r.severityOrImpact === "Critical" || r.severityOrImpact === "High").map(risk => (
+            <div key={risk.id} className="bg-rose-500/10 border border-rose-500/20 rounded-xl p-4 flex items-start gap-4">
+              <AlertCircle className="w-5 h-5 text-rose-500 shrink-0 mt-0.5" />
+              <div>
+                <h4 className="font-bold text-rose-500 mb-1">{risk.title}</h4>
+                <p className="text-sm text-rose-500/80">{risk.description}</p>
+              </div>
+            </div>
+          ))}
+        </div>
       )}
 
       {/* KPI Grid */}

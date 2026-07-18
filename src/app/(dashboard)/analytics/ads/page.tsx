@@ -86,14 +86,30 @@ export default function PpcAdsAnalyticsPage() {
 
     setIsSyncing(true);
     try {
+      // 1. Securely store connection in backend
+      const connRes = await fetch("/api/settings/amazon-connection", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          clientId: adsClientId,
+          clientSecret: adsClientSecret,
+          refreshToken: adsRefreshToken,
+          sellerId: "SPONSORED_ADS_ONLY" // Temporary fallback if sellerId not known here
+        })
+      });
+      const connData = await connRes.json();
+      if (!connData.success) {
+        useToastStore.getState().error("Configuration Failed", connData.error || "Failed to securely save credentials.");
+        setIsSyncing(false);
+        return;
+      }
+
+      // 2. Trigger sync (credentials will be fetched from DB on the backend)
       const res = await fetch("/api/amazon/sync-ads", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           userId: user.id,
-          clientId: adsClientId,
-          clientSecret: adsClientSecret,
-          refreshToken: adsRefreshToken,
           profileId: adsProfileId
         })
       });
@@ -101,9 +117,10 @@ export default function PpcAdsAnalyticsPage() {
       const data = await res.json();
       if (data.success) {
         if (typeof window !== "undefined") {
-          localStorage.setItem("sp_ads_client_id", adsClientId);
-          localStorage.setItem("sp_ads_client_secret", adsClientSecret);
-          localStorage.setItem("sp_ads_refresh_token", adsRefreshToken);
+          // Remove sensitive keys from local storage! Only keep profile ID.
+          localStorage.removeItem("sp_ads_client_id");
+          localStorage.removeItem("sp_ads_client_secret");
+          localStorage.removeItem("sp_ads_refresh_token");
           localStorage.setItem("sp_ads_profile_id", adsProfileId);
         }
         await loadCampaigns();

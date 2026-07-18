@@ -268,23 +268,12 @@ export default function AmazonKWPage() {
   };
 
   const fetchCatalogItemContext = async (asin: string) => {
-    const clientId = typeof window !== "undefined" ? localStorage.getItem("sp_amazon_client_id") : null;
-    const clientSecret = typeof window !== "undefined" ? localStorage.getItem("sp_amazon_client_secret") : null;
-    const refreshToken = typeof window !== "undefined" ? localStorage.getItem("sp_amazon_refresh_token") : null;
-
-    if (!clientId || !clientSecret || !refreshToken) {
-      return "";
-    }
-
     try {
       const catRes = await fetch("/api/amazon/catalog", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           asin: asin.toUpperCase(),
-          clientId,
-          clientSecret,
-          refreshToken,
           region: marketplace
         })
       });

@@ -73,3 +73,85 @@ export const BIResponseSchema = z.object({
 });
 
 export type BIResponse = z.infer<typeof BIResponseSchema>;
+
+// ─── Business Health Schema ──────────────────────────────────────────────────
+
+export const BusinessHealthResponseSchema = z.object({
+  score: z.number().min(0).max(100).describe("Overall business health score (0-100)"),
+  trend: z.enum(["Improving", "Stable", "Declining"]).describe("Direction of the health score"),
+  components: z.object({
+    revenue: z.number().min(0).max(100).describe("Revenue component score"),
+    profitability: z.number().min(0).max(100).describe("Profitability component score"),
+    advertising: z.number().min(0).max(100).describe("Advertising efficiency component score"),
+    inventory: z.number().min(0).max(100).describe("Inventory health component score"),
+    goals: z.number().min(0).max(100).describe("Goal progress component score"),
+  }),
+  strengths: z.array(z.string()).describe("List of business strengths"),
+  weaknesses: z.array(z.string()).describe("List of business weaknesses/risks"),
+  recommendations: z.array(ExplainableRecommendationSchema)
+});
+
+export type BusinessHealthResponse = z.infer<typeof BusinessHealthResponseSchema>;
+
+// ─── Radar Schemas ───────────────────────────────────────────────────────────
+
+export const RadarItemSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  description: z.string(),
+  severityOrImpact: z.enum(["Critical", "High", "Medium", "Low"]).describe("Severity for risks, Impact for opportunities"),
+  confidence: z.number().min(0).max(100),
+  evidence: z.array(z.string()),
+  expectedImpactValue: z.string().optional().describe("E.g., '-₹10,000' or '+15% Sales'"),
+  recommendedAction: ExplainableRecommendationSchema.optional()
+});
+
+export type RadarItem = z.infer<typeof RadarItemSchema>;
+
+export const RadarResponseSchema = z.object({
+  items: z.array(RadarItemSchema)
+});
+
+export type RadarResponse = z.infer<typeof RadarResponseSchema>;
+
+// ─── Daily Briefing Schema ───────────────────────────────────────────────────
+
+export const DailyBriefingSchema = z.object({
+  date: z.string(),
+  greeting: z.string(),
+  yesterdaySummary: z.object({
+    revenue: z.number(),
+    profit: z.number(),
+    orders: z.number(),
+    topProduct: z.string(),
+    worstProduct: z.string().optional(),
+  }),
+  advertisingSummary: z.string(),
+  inventoryAlerts: z.array(z.string()),
+  workerSummary: z.string().optional(),
+  businessHealthScore: z.number(),
+  goalProgress: z.string(),
+  todaysMission: z.string(),
+  recommendedActions: z.array(ExplainableRecommendationSchema),
+  confidence: z.number().min(0).max(100)
+});
+
+export type DailyBriefing = z.infer<typeof DailyBriefingSchema>;
+
+// ─── Business Simulator Schema ───────────────────────────────────────────────
+
+export const SimulatorResponseSchema = z.object({
+  scenarioName: z.string(),
+  expectedRevenueImpact: z.number().describe("Expected change in monthly revenue"),
+  expectedProfitImpact: z.number().describe("Expected change in monthly profit"),
+  expectedAdvertisingImpact: z.number().describe("Expected change in advertising spend/efficiency"),
+  inventoryImpact: z.string().describe("How this affects inventory levels/needs"),
+  cashFlowImpact: z.string(),
+  riskLevel: z.enum(["Critical", "High", "Medium", "Low"]),
+  confidence: z.number().min(0).max(100),
+  timelineDays: z.number().describe("Expected days to see the result"),
+  assumptions: z.array(z.string()).describe("List of assumptions made by the simulator")
+});
+
+export type SimulatorResponse = z.infer<typeof SimulatorResponseSchema>;
+

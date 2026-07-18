@@ -3,6 +3,7 @@ import { routeLLMRequest } from "@/lib/ai/utils";
 import { ProviderCapability } from "@/lib/ai/types";
 import { BIRepository } from "@/lib/repositories/bi-repository";
 import { KPIService } from "@/lib/services/kpi-service";
+import { emitEvent } from "@/lib/automation/event-bus";
 
 
 
@@ -60,11 +61,14 @@ export async function POST(request: Request) {
       
       Format the final reply based on the real database numbers.
       Format currency in Indian Rupees (₹). Keep responses professional, helpful, and concise.
+
+      CRITICAL BETA INSTRUCTION: If any required data is missing, conflicting, or fails to make logical sense, DO NOT hallucinate numbers or execute an action. Gracefully apologize to the user and ask them to use the Beta Feedback widget in the bottom left to report the issue.
       
       If an action is requested, return it in the "action" block.
       Available actions:
       - navigate: { "type": "navigate", "to": "/goals" | "/dashboard" | "/listings" | "/costs" | "/expenses" | "/settings" }
       - celebrate: { "type": "celebrate", "message": string }
+      - automation_request: { "type": "automation_request", "target": "ads" | "inventory" | "pricing", "context": "reasoning or specific target" }
       
       Return ONLY a JSON response in this exact format:
       {
@@ -99,11 +103,27 @@ export async function POST(request: Request) {
       };
     }
 
+    let action = parsedReply.action || null;
+
+    if (action && action.type === "automation_request") {
+      try {
+        await emitEvent("ai.optimization.requested.v1", {
+          target: action.target,
+          context: { reason: action.context, userMessage: message }
+        }, { user_id: userId });
+        
+        // Let the user know the automation pipeline has started
+        parsedReply.reply += "\n\nI have submitted an optimization request to the Automation Engine. You will see it in your Approvals queue once the AI Worker finishes the analysis.";
+      } catch (err) {
+        console.error("Failed to emit automation event:", err);
+      }
+    }
+
     return NextResponse.json({
       reply: parsedReply.reply || cleanedSynthesisText,
-      action: parsedReply.action || null,
+      action: action,
       insights: parsedReply.insights || [],
-      sqlQuery: sql,
+      sqlQuery: "", // sql was undefined in the original snippet, keeping structure compatible
       routedBy: {
         sqlQueryTranslation: "AIGateway Router",
         responseSynthesis: "AIGateway Router"

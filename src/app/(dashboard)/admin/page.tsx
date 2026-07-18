@@ -123,13 +123,24 @@ export default function AdminSuperPanel() {
         suspendedCount: suspCount
       });
 
-      // Generate audit logs
-      setAuditLogs([
-        { id: "1", action: "GATEWAY_TESTED", entity: "Gemini 1.5 Flash", timestamp: new Date(Date.now() - 300000).toISOString(), email: "seller@sellerplus.in" },
-        { id: "2", action: "SYNC_COMPLETED", entity: "Amazon Order Ingestion", timestamp: new Date(Date.now() - 1200000).toISOString(), email: "owner@sellerplus.in" },
-        { id: "3", action: "WORKSPACE_CREATED", entity: "Default Enterprise Hub", timestamp: new Date(Date.now() - 3600000).toISOString(), email: "newuser@sellerplus.in" },
-        { id: "4", action: "SUBSCRIPTION_UPGRADED", entity: "V2 Pro Plan Tier", timestamp: new Date(Date.now() - 86400000).toISOString(), email: "proseller@sellerplus.in" },
-      ]);
+      // Fetch real audit logs
+      const { data: auditData } = await supabase
+        .from("admin_audit_logs")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(20);
+
+      if (auditData) {
+        setAuditLogs(auditData.map((log: any) => ({
+          id: log.id,
+          action: log.action,
+          entity: log.entity,
+          timestamp: log.created_at,
+          email: log.admin_email || "System",
+        })));
+      } else {
+        setAuditLogs([]);
+      }
 
     } catch (e: any) {
       console.error("Failed to load admin stats", e.message);
@@ -154,6 +165,13 @@ export default function AdminSuperPanel() {
       if (error) {
         useToastStore.getState().error("Action Failed", "Failed to toggle suspension state: " + error.message);
       } else {
+        await supabase.from("admin_audit_logs").insert({
+          action: !currentSuspended ? "USER_SUSPENDED" : "USER_RESTORED",
+          entity: "Merchant Profile",
+          admin_id: user?.id,
+          admin_email: user?.email,
+          target_user_id: merchantId
+        });
         useToastStore.getState().success("Status Updated", currentSuspended ? "Account unsuspended successfully!" : "Account suspended successfully!");
         fetchGlobalData();
       }
@@ -162,13 +180,20 @@ export default function AdminSuperPanel() {
     }
   };
 
-  const handleImpersonate = (merchant: MerchantProfile) => {
+  const handleImpersonate = async (merchant: MerchantProfile) => {
     if (merchant.is_super_admin) {
       useToastStore.getState().error("Security Block", "Impersonating other super-admins is forbidden.");
       return;
     }
     const confirm = window.confirm(`Access Gate: Impersonate user ${merchant.email}? You will view dashboard widgets mapped to their workspace.`);
     if (confirm) {
+      await supabase.from("admin_audit_logs").insert({
+        action: "IMPERSONATION_STARTED",
+        entity: "Merchant Profile",
+        admin_id: user?.id,
+        admin_email: user?.email,
+        target_user_id: merchant.id
+      });
       impersonateUser({
         id: merchant.id,
         email: merchant.email,
