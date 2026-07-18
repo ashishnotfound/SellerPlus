@@ -106,13 +106,15 @@ async function getAccessToken(credentials: AmazonCredentials): Promise<string> {
 async function fetchWithBackoff(
   url: string,
   headers: Record<string, string>,
-  maxRetries: number = 5
+  maxRetries: number = 5,
+  method: string = "GET",
+  body?: string
 ): Promise<Response> {
   let attempt = 0;
   let delay = 1000;
 
   while (attempt < maxRetries) {
-    const res = await fetch(url, { method: "GET", headers });
+    const res = await fetch(url, { method, headers, body });
 
     if (res.status === 429) {
       attempt++;
@@ -697,5 +699,150 @@ export async function syncFbaInventory(
   } catch (e: any) {
     log.error("[InventorySync] Sync error:", undefined, { error: e.message });
     return { synced: 0, error: e.message };
+  }
+}
+
+// ─── SP-API Reports (Listings) ───────────────────────────────────────
+
+/**
+ * Sync all merchant listings using the Reports API (GET_MERCHANT_LISTINGS_ALL_DATA).
+ */
+export async function syncAmazonListings(
+  supabase: SupabaseClient<any, "public", any>,
+  userId: string,
+  credentials: AmazonCredentials
+): Promise<{ synced: number; added: number; updated: number; error?: string }> {
+  try {
+    const accessToken = await getAccessToken(credentials);
+    const endpoint = resolveEndpoint(credentials.region, credentials.sandbox);
+    
+    // 1. Create Report
+    log.info(`[ListingsSync] Requesting GET_MERCHANT_LISTINGS_ALL_DATA report...`);
+    const createRes = await fetchWithBackoff(`${endpoint.spApiUrl}/reports/2021-06-30/reports`, {
+      "x-amz-access-token": accessToken,
+      "Content-Type": "application/json",
+      "Accept": "application/json"
+    }, 3, "POST", JSON.stringify({
+      reportType: "GET_MERCHANT_LISTINGS_ALL_DATA",
+      marketplaceIds: [endpoint.marketplaceId]
+    }));
+    
+    if (!createRes.ok) {
+      const errText = await createRes.text();
+      throw new Error(`Report creation failed: ${errText}`);
+    }
+    
+    const createData = await createRes.json();
+    const reportId = createData.reportId;
+    if (!reportId) throw new Error("No reportId returned from SP-API.");
+    
+    log.info(`[ListingsSync] Report requested. Report ID: ${reportId}. Polling for completion...`);
+    
+    // 2. Poll Report Status
+    let documentId: string | null = null;
+    let attempts = 0;
+    while (attempts < 60) { // Max 60 attempts (approx 3-5 mins)
+      await new Promise(r => setTimeout(r, 5000)); // Wait 5 seconds
+      attempts++;
+      
+      const statusRes = await fetchWithBackoff(`${endpoint.spApiUrl}/reports/2021-06-30/reports/${reportId}`, {
+        "x-amz-access-token": accessToken,
+        "Accept": "application/json"
+      });
+      
+      const statusData = await statusRes.json();
+      const status = statusData.processingStatus;
+      
+      if (status === "DONE") {
+        documentId = statusData.reportDocumentId;
+        break;
+      } else if (status === "FATAL" || status === "CANCELLED") {
+        throw new Error(`Report processing failed with status: ${status}`);
+      }
+    }
+    
+    if (!documentId) {
+      throw new Error("Report polling timed out.");
+    }
+    
+    log.info(`[ListingsSync] Report completed. Document ID: ${documentId}. Fetching document URL...`);
+    
+    // 3. Get Document URL
+    const docRes = await fetchWithBackoff(`${endpoint.spApiUrl}/reports/2021-06-30/documents/${documentId}`, {
+      "x-amz-access-token": accessToken,
+      "Accept": "application/json"
+    });
+    const docData = await docRes.json();
+    const downloadUrl = docData.url;
+    
+    if (!downloadUrl) throw new Error("No download URL in document response.");
+    
+    log.info(`[ListingsSync] Downloading report content...`);
+    
+    // 4. Download and Parse TSV
+    const fileRes = await fetch(downloadUrl);
+    if (!fileRes.ok) throw new Error(`Failed to download report content. HTTP ${fileRes.status}`);
+    
+    // Convert arraybuffer to string, handle potential encodings
+    const buffer = await fileRes.arrayBuffer();
+    // Assuming UTF-8 TSV data
+    const text = new TextDecoder("utf-8").decode(buffer);
+    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+    
+    if (lines.length <= 1) {
+      return { synced: 0, added: 0, updated: 0 }; // Only headers or empty
+    }
+    
+    const headers = lines[0].split('\t');
+    const items = lines.slice(1).map(line => {
+      const values = line.split('\t');
+      const obj: any = {};
+      headers.forEach((h, i) => { obj[h] = values[i]; });
+      return obj;
+    });
+    
+    log.info(`[ListingsSync] Parsed ${items.length} items. Upserting to database...`);
+    
+    // 5. Upsert to DB
+    let added = 0;
+    let updated = 0;
+    
+    // Batch upsert to prevent huge payloads
+    const batchSize = 100;
+    for (let i = 0; i < items.length; i += batchSize) {
+      const batch = items.slice(i, i + batchSize).map(item => ({
+        user_id: userId,
+        sku: item['seller-sku'],
+        asin: item['asin1'],
+        title: item['item-name'],
+        price: parseFloat(item['price']) || null,
+        quantity: parseInt(item['quantity']) || 0,
+        status: item['status'],
+        fulfillment_channel: item['fulfillment-channel'] || 'DEFAULT',
+        marketplace_id: endpoint.marketplaceId,
+        raw_data: item,
+        last_updated: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      }));
+      
+      const { error } = await supabase
+        .from('amazon_listings')
+        .upsert(batch, { onConflict: 'user_id,sku' });
+        
+      if (error) {
+        throw new Error(`DB Upsert failed: ${error.message}`);
+      }
+      
+      // We don't accurately know added vs updated without reading first, 
+      // but we can estimate or just report total synced.
+      updated += batch.length;
+    }
+    
+    log.info(`[ListingsSync] Sync complete. Processed ${items.length} listings.`);
+    return { synced: items.length, added: items.length, updated: 0 };
+    
+  } catch (e: any) {
+    log.error("[ListingsSync] Sync error:", undefined, { error: e.message });
+    return { synced: 0, added: 0, updated: 0, error: e.message };
   }
 }

@@ -202,6 +202,7 @@ export function AmazonAPISettings() {
   const [loading, setLoading] = useState(true);
   const [savingCreds, setSavingCreds] = useState(false);
   const [connecting, setConnecting] = useState<Provider | null>(null);
+  const [syncingListings, setSyncingListings] = useState(false);
 
   const fetchData = useCallback(async () => {
     if (!user?.id) return;
@@ -332,6 +333,31 @@ export function AmazonAPISettings() {
     }
   };
 
+  const handleSyncListings = async () => {
+    setSyncingListings(true);
+    try {
+      useToastStore.getState().success("Syncing", "Requesting Listings Report from Amazon... This may take a few minutes.");
+      
+      const res = await fetch("/api/amazon/sync-listings", {
+        method: "POST",
+      });
+      
+      const data = await res.json();
+      
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to sync listings");
+      }
+      
+      useToastStore.getState().success(
+        "Sync Complete", 
+        `Successfully imported/updated ${data.synced || data.added || 0} listings from Amazon.`
+      );
+    } catch (err: any) {
+      useToastStore.getState().error("Sync Failed", err.message);
+    }
+    setSyncingListings(false);
+  };
+
   const spToken = tokens.find((t) => t.provider === "sp") ?? null;
   const adsToken = tokens.find((t) => t.provider === "ads") ?? null;
 
@@ -452,17 +478,30 @@ export function AmazonAPISettings() {
               </p>
             </div>
           </div>
+          
+          <div className="flex items-center gap-3">
+            {spToken && !loading && (
+              <button
+                onClick={handleSyncListings}
+                disabled={syncingListings}
+                className="h-9 px-4 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 font-bold text-xs flex items-center gap-2 transition-all disabled:opacity-50"
+              >
+                {syncingListings ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                {syncingListings ? "Syncing..." : "Sync Listings"}
+              </button>
+            )}
 
-          {(spToken || adsToken) && (
-            <button
-              type="button"
-              onClick={fetchData}
-              className="h-8 w-8 rounded-xl border border-white/10 bg-white/[0.03] hover:bg-white/[0.07] flex items-center justify-center text-zinc-400 hover:text-white transition-all"
-              title="Refresh status"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-            </button>
-          )}
+            {(spToken || adsToken) && (
+              <button
+                type="button"
+                onClick={fetchData}
+                className="h-8 w-8 rounded-xl border border-white/10 bg-white/[0.03] hover:bg-white/[0.07] flex items-center justify-center text-zinc-400 hover:text-white transition-all"
+                title="Refresh status"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
         </div>
 
         {/* API Cards */}
