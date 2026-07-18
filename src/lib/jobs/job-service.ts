@@ -12,7 +12,7 @@ import { log } from "@/lib/logger";
 
 // ─── Shared Types ─────────────────────────────────────────────────────
 
-export type JobStatus = "queued" | "processing" | "completed" | "failed";
+export type JobStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
 
 export interface EnqueuedJob<T = Record<string, unknown>> {
   /** Job type identifier — must match a JobRegistry key */
