@@ -19,11 +19,35 @@ import { log } from "@/lib/logger";
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
-    const { clientId, clientSecret, refreshToken, region, sandbox, userId: bodyUserId, lastUpdatedAfter, fullRebuild = false } = body;
+    let parsedBody: any = {};
+    try {
+      const text = await request.text();
+      if (text) parsedBody = JSON.parse(text);
+    } catch (e) {}
+
+    const { region, sandbox, userId: bodyUserId, lastUpdatedAfter, fullRebuild = false } = parsedBody;
 
     // Authenticate: JWT in production, body userId in development
     const { userId, supabaseAdmin } = await authenticateWithDevFallback(request, bodyUserId);
+
+    // Fetch credentials from DB securely
+    const { data: devCreds } = await supabaseAdmin
+      .from("amazon_developer_credentials")
+      .select("*")
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    const clientId = devCreds?.sp_client_id || process.env.NEXT_PUBLIC_AMAZON_SP_CLIENT_ID;
+    const clientSecret = devCreds?.sp_client_secret || process.env.AMAZON_SP_CLIENT_SECRET;
+
+    const { data: userToken } = await supabaseAdmin
+      .from("amazon_user_tokens")
+      .select("refresh_token")
+      .eq("supabase_user_id", userId)
+      .eq("provider", "sp")
+      .maybeSingle();
+
+    const refreshToken = userToken?.refresh_token;
 
     if (!clientId || !clientSecret || !refreshToken) {
       return NextResponse.json(
@@ -36,7 +60,7 @@ export async function POST(request: Request) {
       clientId,
       clientSecret,
       refreshToken,
-      region: region || "India (amazon.in)",
+      region: region || devCreds?.region || "India (amazon.in)",
       sandbox: sandbox || false,
     };
 

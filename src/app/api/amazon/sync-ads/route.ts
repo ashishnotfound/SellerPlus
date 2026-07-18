@@ -80,7 +80,12 @@ async function fetchWithRetry(
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
+    let body: any = {};
+    try {
+      const text = await request.text();
+      if (text) body = JSON.parse(text);
+    } catch (e) {}
+
     const {
       profileId: bodyProfileId,
       region,

@@ -34,22 +34,30 @@ export async function POST(req: NextRequest) {
       .eq("user_id", user.userId)
       .single();
 
-    if (credsError || !creds || !creds.sp_refresh_token) {
+    const { data: userToken } = await supabase
+      .from("amazon_user_tokens")
+      .select("refresh_token")
+      .eq("supabase_user_id", user.userId)
+      .eq("provider", "sp")
+      .maybeSingle();
+
+    if (!userToken || !userToken.refresh_token) {
       return NextResponse.json({ 
         error: "No Amazon credentials found or missing refresh token.",
-        details: credsError?.message 
       }, { status: 400 });
     }
+
+    const refreshToken = userToken.refresh_token;
 
     // 4. Run Sync Engine
     const result = await syncAmazonListings(
       supabase,
       user.userId,
       {
-        clientId: process.env.NEXT_PUBLIC_AMAZON_SP_CLIENT_ID || creds.sp_client_id,
-        clientSecret: process.env.AMAZON_SP_CLIENT_SECRET || creds.sp_client_secret,
-        refreshToken: creds.sp_refresh_token,
-        region: creds.region || "IN", 
+        clientId: process.env.NEXT_PUBLIC_AMAZON_SP_CLIENT_ID || creds?.sp_client_id,
+        clientSecret: process.env.AMAZON_SP_CLIENT_SECRET || creds?.sp_client_secret,
+        refreshToken: refreshToken,
+        region: creds?.region || "IN", 
         sandbox: false
       }
     );
