@@ -1,7 +1,7 @@
 begin;
 
 create extension if not exists pgtap with schema extensions;
-select plan(18);
+select plan(24);
 
 insert into auth.users (
   id, email, encrypted_password, email_confirmed_at,
@@ -43,6 +43,37 @@ insert into public.orders (
 ) values
   ('11111100-0000-0000-0000-000000111111', '11000000-0000-0000-0000-000000000011', '10000000-0000-0000-0000-000000000001', 'amazon', 'TENANT-A-ORDER', 'pending', 100, 'INR'),
   ('22222200-0000-0000-0000-000000222222', '22000000-0000-0000-0000-000000000022', '20000000-0000-0000-0000-000000000002', 'amazon', 'TENANT-B-ORDER', 'pending', 200, 'INR');
+
+insert into public.reyo_pack_sessions (
+  id, workspace_id, mode, status, started_by, client_session_id
+) values
+  ('11111101-0000-0000-0000-000000111111', '11000000-0000-0000-0000-000000000011', 'PACKING', 'COMPLETED', '10000000-0000-0000-0000-000000000001', '11111101-1000-0000-0000-000000111111'),
+  ('22222202-0000-0000-0000-000000222222', '22000000-0000-0000-0000-000000000022', 'PACKING', 'COMPLETED', '20000000-0000-0000-0000-000000000002', '22222202-2000-0000-0000-000000222222');
+
+insert into public.shipments (
+  id, workspace_id, order_id, carrier, status, awb_code, packing_status
+) values
+  ('11111102-0000-0000-0000-000000111111', '11000000-0000-0000-0000-000000000011', '11111100-0000-0000-0000-000000111111', 'Amazon', 'ReadyForPickup', 'AWB-TENANT-A', 'PACKED'),
+  ('22222203-0000-0000-0000-000000222222', '22000000-0000-0000-0000-000000000022', '22222200-0000-0000-0000-000000222222', 'Amazon', 'ReadyForPickup', 'AWB-TENANT-B', 'PACKED');
+
+insert into public.reyo_pack_packing_events (
+  id, workspace_id, order_id, shipment_id, session_id, actor_id,
+  event_type, awb, quantity, previous_status, new_status, idempotency_key
+) values
+  ('11111103-0000-0000-0000-000000111111', '11000000-0000-0000-0000-000000000011', '11111100-0000-0000-0000-000000111111', '11111102-0000-0000-0000-000000111111', '11111101-0000-0000-0000-000000111111', '10000000-0000-0000-0000-000000000001', 'PACK_CONFIRMED', 'AWB-TENANT-A', 1, 'PACKING', 'PACKED', 'tenant-a-packing-event'),
+  ('22222204-0000-0000-0000-000000222222', '22000000-0000-0000-0000-000000000022', '22222200-0000-0000-0000-000000222222', '22222203-0000-0000-0000-000000222222', '22222202-0000-0000-0000-000000222222', '20000000-0000-0000-0000-000000000002', 'PACK_CONFIRMED', 'AWB-TENANT-B', 1, 'PACKING', 'PACKED', 'tenant-b-packing-event');
+
+insert into public.reyo_pack_locations (
+  id, workspace_id, location_type, code, name, created_by
+) values
+  ('11111104-0000-0000-0000-000000111111', '11000000-0000-0000-0000-000000000011', 'BIN', 'A-01-01', 'Tenant A Bin', '10000000-0000-0000-0000-000000000001'),
+  ('22222205-0000-0000-0000-000000222222', '22000000-0000-0000-0000-000000000022', 'BIN', 'B-01-01', 'Tenant B Bin', '20000000-0000-0000-0000-000000000002');
+
+insert into public.reyo_pack_label_documents (
+  id, workspace_id, shipment_id, external_document_reference, document_source
+) values
+  ('11111105-0000-0000-0000-000000111111', '11000000-0000-0000-0000-000000000011', '11111102-0000-0000-0000-000000111111', 'sensitive-label-reference-a', 'LEGACY'),
+  ('22222206-0000-0000-0000-000000222222', '22000000-0000-0000-0000-000000000022', '22222203-0000-0000-0000-000000222222', 'sensitive-label-reference-b', 'LEGACY');
 
 insert into public.ai_schedules (
   id, workspace_id, user_id, title, task_type, cron_schedule, status, next_run
@@ -105,6 +136,26 @@ select is(
   (select count(*)::integer from public.orders),
   1,
   'Tenant A sees only its order rows'
+);
+select is(
+  (select count(*)::integer from public.shipments),
+  1,
+  'Tenant A sees only its shipment rows'
+);
+select is(
+  (select count(*)::integer from public.reyo_pack_sessions),
+  1,
+  'Tenant A sees only its Reyo Pack sessions'
+);
+select is(
+  (select count(*)::integer from public.reyo_pack_packing_events),
+  1,
+  'Tenant A sees only its immutable packing events'
+);
+select is(
+  (select count(*)::integer from public.reyo_pack_locations),
+  1,
+  'Tenant A sees only its warehouse locations'
 );
 select is(
   (select count(*)::integer from public.workspaces),
@@ -232,6 +283,26 @@ select throws_ok(
   '42501',
   null,
   'Tenant A cannot insert goals directly into Tenant B'
+);
+select throws_ok(
+  $$
+    insert into public.reyo_pack_packing_events (
+      workspace_id, event_type, quantity
+    ) values (
+      '22000000-0000-0000-0000-000000000022',
+      'ERROR',
+      0
+    )
+  $$,
+  '42501',
+  null,
+  'Authenticated clients cannot write Reyo Pack events directly'
+);
+select throws_ok(
+  $$ select count(*) from public.reyo_pack_label_documents $$,
+  '42501',
+  null,
+  'Sensitive label document references remain service-only'
 );
 
 select is(
