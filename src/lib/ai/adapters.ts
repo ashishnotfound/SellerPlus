@@ -14,6 +14,7 @@ import {
   LLMSetting 
 } from "./types";
 import { configuredCostUsd } from "./pricing";
+import { createRequestSignal } from "@/lib/execution-deadline";
 
 // ─── Capability Registry Mapping ─────────────────────────────────────
 
@@ -116,7 +117,9 @@ export class GeminiAdapter implements ProviderAdapter {
     });
 
     const start = Date.now();
-    const result = await model.generateContent(prompt);
+    const result = await model.generateContent(prompt, {
+      signal: createRequestSignal(options ?? {}, 60_000),
+    });
     const latency = Date.now() - start;
     const text = result.response.text();
 
@@ -191,7 +194,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
       method: "POST",
       headers,
       body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(60_000),
+      signal: createRequestSignal(options ?? {}, 60_000),
       cache: "no-store",
     });
     
@@ -257,7 +260,7 @@ export class AnthropicAdapter implements ProviderAdapter {
       method: "POST",
       headers,
       body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(60_000),
+      signal: createRequestSignal(options ?? {}, 60_000),
       cache: "no-store",
     });
     

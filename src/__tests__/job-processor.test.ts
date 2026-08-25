@@ -53,7 +53,7 @@ describe("Job Processor Route", () => {
 
     expect(authenticateCron).toHaveBeenCalled();
     expect(mockSupabase.rpc).toHaveBeenCalledWith("claim_jobs", {
-      batch_size: 5,
+      batch_size: 1,
       worker_name: "web-job-processor",
       lock_timeout_seconds: 300,
     });
@@ -120,6 +120,8 @@ describe("Job Processor Route", () => {
       userId: "user-1",
       workspaceId: "workspace-1",
       payload: { target: "xyz" },
+      deadlineAt: expect.any(Number),
+      signal: expect.any(AbortSignal),
     }));
 
     expect(mockSupabase.update).toHaveBeenCalledWith(expect.objectContaining({
@@ -283,5 +285,45 @@ describe("Job Processor Route", () => {
     
     expect(json.processed).toBe(1);
     expect(json.results[0].status).toBe("failed");
+  });
+
+  it("releases a timed-out job while time remains to persist retry state", async () => {
+    vi.useFakeTimers();
+    try {
+      const mockHandler = vi.fn(() => new Promise(() => undefined));
+      (getJobEntry as any).mockReturnValue({ handler: mockHandler });
+      mockSupabase.rpc.mockResolvedValue({
+        data: [{
+          id: "deadline-job",
+          job_type: "bi_analysis",
+          user_id: "user-1",
+          workspace_id: "workspace-1",
+          payload: {},
+          attempts: 0,
+          max_attempts: 3,
+        }],
+        error: null,
+      });
+
+      const responsePromise = GET(new Request("http://localhost/api/workers/job-processor"));
+      await vi.advanceTimersByTimeAsync(52_001);
+      const response = await responsePromise;
+      const json = await response.json();
+
+      expect(mockSupabase.update).toHaveBeenCalledWith(expect.objectContaining({
+        status: "retrying",
+        attempts: 1,
+        locked_by: null,
+        locked_until: null,
+        last_error: expect.stringContaining("execution deadline"),
+      }));
+      expect(json.results).toEqual([{
+        jobId: "deadline-job",
+        status: "requeued",
+        jobType: "bi_analysis",
+      }]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

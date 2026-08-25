@@ -10,6 +10,11 @@ import { generateCacheKey, aiCacheManager } from "./cache";
 import { resilienceStore } from "./resilience-store";
 import { singleFlight } from "./single-flight";
 import { getAIRequestContext } from "./request-context";
+import {
+  abortableDelay,
+  assertExecutionActive,
+  ExecutionDeadlineError,
+} from "@/lib/execution-deadline";
 import { AIBudgetError, reserveAIRequestBudget } from "./budget";
 import { log } from "@/lib/logger";
 
@@ -316,6 +321,12 @@ export async function routeLLMRequest(
   const effectiveUserId = userId ?? requestContext?.userId;
   const feature = options?.feature ?? requestContext?.feature ?? "unclassified";
   const correlationId = options?.correlationId ?? crypto.randomUUID();
+  const requestOptions: GenerationOptions = {
+    ...options,
+    deadlineAt: options?.deadlineAt ?? requestContext?.deadlineAt,
+    signal: options?.signal ?? requestContext?.signal,
+  };
+  assertExecutionActive(requestOptions);
   sanitizePrompt(prompt, correlationId);
 
   const featureContext = { workspaceId, userId: effectiveUserId };
@@ -324,7 +335,7 @@ export async function routeLLMRequest(
   }
 
   const tenantSettings = workspaceId ? await tenantProviderSettings(workspaceId) : [];
-  const requiredCapabilities = options?.capabilities ?? [];
+  const requiredCapabilities = requestOptions.capabilities ?? [];
   const providers = [...tenantSettings, ...environmentProviderSettings()]
     .filter((setting, index, all) =>
       all.findIndex((candidate) =>
@@ -343,6 +354,7 @@ export async function routeLLMRequest(
 
   let lastError: Error | null = null;
   for (const setting of providers) {
+    assertExecutionActive(requestOptions, 1_000);
     const providerKey = `${setting.provider}:${setting.model_name}`;
     if (workspaceId) {
       const status = await resilienceStore.getProviderStatus(workspaceId, providerKey);
@@ -355,12 +367,12 @@ export async function routeLLMRequest(
     const cacheKey = generateCacheKey(
       setting.provider,
       setting.model_name,
-      options?.temperature ?? 0.1,
-      options?.systemPromptVersion ?? "default",
+      requestOptions.temperature ?? 0.1,
+      requestOptions.systemPromptVersion ?? "default",
       `${workspaceId}:${prompt}`,
     );
 
-    if (cacheEnabled && workspaceId && !options?.bypassCache) {
+    if (cacheEnabled && workspaceId && !requestOptions.bypassCache) {
       const cached = await aiCacheManager.get(cacheKey, workspaceId);
       if (cached && !cached.isNegative) {
         await recordAiUsage({
@@ -382,26 +394,30 @@ export async function routeLLMRequest(
     const startedAt = Date.now();
     try {
       const flight = await singleFlight.execute(cacheKey, async () => {
-        const maxAttempts = options?.bypassCache ? 1 : Math.max(1, config.ai.maxRetries);
+        const maxAttempts = requestOptions.bypassCache ? 1 : Math.max(1, config.ai.maxRetries);
         if (workspaceId) {
           await reserveAIRequestBudget({
             workspaceId,
             correlationId,
             setting,
             prompt,
-            options,
+            options: requestOptions,
             attempts: maxAttempts,
           });
         }
         let attempt = 0;
         while (attempt < maxAttempts) {
+          assertExecutionActive(requestOptions, 1_000);
           try {
-            return await adapter.generateText(prompt, options);
+            return await adapter.generateText(prompt, requestOptions);
           } catch (error) {
+            if (error instanceof ExecutionDeadlineError || requestOptions.signal?.aborted) {
+              throw new ExecutionDeadlineError();
+            }
             attempt += 1;
             if (attempt >= maxAttempts) throw error;
             const delay = Math.min(8_000, 500 * 2 ** attempt) + Math.floor(Math.random() * 250);
-            await new Promise((resolve) => setTimeout(resolve, delay));
+            await abortableDelay(delay, requestOptions, 1_000);
           }
         }
         throw new Error("AI provider did not return a result.");
@@ -425,7 +441,7 @@ export async function routeLLMRequest(
 
       if (workspaceId) {
         await resilienceStore.recordSuccess(workspaceId, providerKey);
-        if (cacheEnabled) await aiCacheManager.set(cacheKey, workspaceId, result, options);
+        if (cacheEnabled) await aiCacheManager.set(cacheKey, workspaceId, result, requestOptions);
       }
       await recordAiUsage({
         workspaceId,
@@ -441,6 +457,9 @@ export async function routeLLMRequest(
       return { ...result, provider: setting.provider, model: setting.model_name };
     } catch (error) {
       lastError = error instanceof Error ? error : new Error("AI provider request failed.");
+      if (lastError instanceof ExecutionDeadlineError || requestOptions.signal?.aborted) {
+        throw new ExecutionDeadlineError();
+      }
       if (lastError instanceof AIBudgetError) {
         await recordAiUsage({
           workspaceId,
@@ -461,7 +480,7 @@ export async function routeLLMRequest(
             cacheKey,
             workspaceId,
             { text: "provider temporarily unavailable" },
-            options,
+            requestOptions,
             true,
           );
         }

@@ -6,6 +6,11 @@ import {
   getAmazonMarketplaceAccount,
   readAmazonCredentialSet,
 } from "@/lib/amazon/credentials";
+import {
+  abortableDelay,
+  createRequestSignal,
+  type ExecutionBoundary,
+} from "@/lib/execution-deadline";
 
 const orderSchema = z.object({
   AmazonOrderId: z.string().min(1).max(100),
@@ -40,12 +45,16 @@ function endpoint(region: string): string {
   return "https://sellingpartnerapi-eu.amazon.com";
 }
 
-async function spFetch(url: string, accessToken: string): Promise<Response> {
+async function spFetch(
+  url: string,
+  accessToken: string,
+  boundary: ExecutionBoundary,
+): Promise<Response> {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const response = await fetch(url, {
       headers: { "x-amz-access-token": accessToken, Accept: "application/json" },
       cache: "no-store",
-      signal: AbortSignal.timeout(20_000),
+      signal: createRequestSignal(boundary, 20_000),
     });
     if (response.status !== 429 && response.status < 500) return response;
     if (attempt === 4) return response;
@@ -53,18 +62,23 @@ async function spFetch(url: string, accessToken: string): Promise<Response> {
     const delay = Number.isFinite(retryAfter)
       ? Math.min(retryAfter * 1_000, 30_000)
       : Math.min(750 * 2 ** attempt + Math.floor(Math.random() * 250), 12_000);
-    await new Promise((resolve) => setTimeout(resolve, delay));
+    await abortableDelay(delay, boundary, 1_000);
   }
   throw new Error("Amazon SP-API request exhausted its retry policy.");
 }
 
-async function loadOrderItems(baseUrl: string, accessToken: string, orderId: string) {
+async function loadOrderItems(
+  baseUrl: string,
+  accessToken: string,
+  orderId: string,
+  boundary: ExecutionBoundary,
+) {
   const items: Array<Record<string, unknown>> = [];
   let nextToken: string | undefined;
   for (let page = 0; page < 10; page += 1) {
     const url = new URL(`${baseUrl}/orders/v0/orders/${encodeURIComponent(orderId)}/orderItems`);
     if (nextToken) url.searchParams.set("NextToken", nextToken);
-    const response = await spFetch(url.toString(), accessToken);
+    const response = await spFetch(url.toString(), accessToken, boundary);
     if (!response.ok) throw new Error(`Amazon order items failed (HTTP ${response.status}).`);
     const body = (await response.json()) as {
       payload?: { OrderItems?: Array<Record<string, unknown>>; NextToken?: string };
@@ -145,13 +159,14 @@ async function fetchOrdersPage(
   marketplaceId: string,
   updatedAfter: string,
   nextToken?: string,
+  boundary: ExecutionBoundary = {},
 ) {
   const url = new URL(`${baseUrl}/orders/v0/orders`);
   url.searchParams.set("MarketplaceIds", marketplaceId);
   url.searchParams.set("MaxResultsPerPage", "100");
   if (nextToken) url.searchParams.set("NextToken", nextToken);
   else url.searchParams.set("LastUpdatedAfter", updatedAfter);
-  const response = await spFetch(url.toString(), accessToken);
+  const response = await spFetch(url.toString(), accessToken, boundary);
   if (!response.ok) throw new Error(`Amazon Orders API failed (HTTP ${response.status}).`);
   const body = (await response.json()) as {
     payload?: { Orders?: unknown[]; NextToken?: string };
@@ -169,6 +184,7 @@ async function syncInventoryPage(
   accountId: string,
   marketplaceId: string,
   nextToken?: string,
+  boundary: ExecutionBoundary = {},
 ) {
   const url = new URL(`${baseUrl}/fba/inventory/v1/summaries`);
   url.searchParams.set("details", "true");
@@ -176,7 +192,7 @@ async function syncInventoryPage(
   url.searchParams.set("granularityId", marketplaceId);
   url.searchParams.set("marketplaceIds", marketplaceId);
   if (nextToken) url.searchParams.set("nextToken", nextToken);
-  const response = await spFetch(url.toString(), accessToken);
+  const response = await spFetch(url.toString(), accessToken, boundary);
   if (!response.ok) throw new Error(`Amazon FBA Inventory API failed (HTTP ${response.status}).`);
   const body = (await response.json()) as {
     payload?: { inventorySummaries?: Array<Record<string, unknown>>; pagination?: { nextToken?: string } };
@@ -231,7 +247,8 @@ export async function runAmazonOrdersSync(ctx: JobContext): Promise<JobHandlerRe
     account.id,
     "amazon_sp_api",
   );
-  const accessToken = await exchangeLwaRefreshToken(credentials);
+  const boundary = { signal: ctx.signal, deadlineAt: ctx.deadlineAt };
+  const accessToken = await exchangeLwaRefreshToken(credentials, boundary);
   const baseUrl = endpoint(account.region);
 
   if (payload.phase === "inventory") {
@@ -242,6 +259,7 @@ export async function runAmazonOrdersSync(ctx: JobContext): Promise<JobHandlerRe
       account.id,
       account.marketplaceId,
       payload.inventoryNextToken,
+      boundary,
     );
     const inventoryImported = payload.inventoryImported + page.imported;
     if (page.nextToken) {
@@ -288,6 +306,7 @@ export async function runAmazonOrdersSync(ctx: JobContext): Promise<JobHandlerRe
       account.marketplaceId,
       payload.updatedAfter,
       nextToken,
+      boundary,
     );
     pendingOrders = page.orders;
     nextToken = page.nextToken;
@@ -308,7 +327,7 @@ export async function runAmazonOrdersSync(ctx: JobContext): Promise<JobHandlerRe
 
   const chunk = pendingOrders.slice(0, 3);
   for (const order of chunk) {
-    const items = await loadOrderItems(baseUrl, accessToken, order.AmazonOrderId);
+    const items = await loadOrderItems(baseUrl, accessToken, order.AmazonOrderId, boundary);
     await persistOrder(ctx, account.id, account.marketplaceId, order, items);
   }
   const remaining = pendingOrders.slice(chunk.length);

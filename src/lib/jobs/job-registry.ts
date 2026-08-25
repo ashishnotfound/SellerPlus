@@ -29,6 +29,8 @@ export interface JobContext {
   payload: Record<string, unknown>;
   supabaseAdmin: SupabaseClient;
   scheduleId?: string;
+  deadlineAt?: number;
+  signal?: AbortSignal;
 }
 
 export interface JobHandlerResult {

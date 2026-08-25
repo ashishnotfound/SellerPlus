@@ -5,6 +5,11 @@ import {
   getAmazonMarketplaceAccount,
   readAmazonCredentialSet,
 } from "@/lib/amazon/credentials";
+import {
+  abortableDelay,
+  createRequestSignal,
+  type ExecutionBoundary,
+} from "@/lib/execution-deadline";
 
 const payloadSchema = z.object({
   marketplaceAccountId: z.string().uuid(),
@@ -22,12 +27,16 @@ function endpoint(region: string): string {
   return "https://sellingpartnerapi-eu.amazon.com";
 }
 
-async function spFetch(url: string, accessToken: string): Promise<Response> {
+async function spFetch(
+  url: string,
+  accessToken: string,
+  boundary: ExecutionBoundary,
+): Promise<Response> {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const response = await fetch(url, {
       headers: { "x-amz-access-token": accessToken, Accept: "application/json" },
       cache: "no-store",
-      signal: AbortSignal.timeout(20_000),
+      signal: createRequestSignal(boundary, 20_000),
     });
     if (response.status !== 429 && response.status < 500) return response;
     if (attempt === 4) return response;
@@ -35,7 +44,7 @@ async function spFetch(url: string, accessToken: string): Promise<Response> {
     const delay = Number.isFinite(retryAfter)
       ? Math.min(retryAfter * 1_000, 30_000)
       : Math.min(1_000 * 2 ** attempt + Math.floor(Math.random() * 250), 15_000);
-    await new Promise((resolve) => setTimeout(resolve, delay));
+    await abortableDelay(delay, boundary, 1_000);
   }
   throw new Error("Amazon Finances API request exhausted its retry policy.");
 }
@@ -145,14 +154,15 @@ export async function runAmazonRefundsSync(ctx: JobContext): Promise<JobHandlerR
     account.id,
     "amazon_sp_api",
   );
-  const accessToken = await exchangeLwaRefreshToken(credentials);
+  const boundary = { signal: ctx.signal, deadlineAt: ctx.deadlineAt };
+  const accessToken = await exchangeLwaRefreshToken(credentials, boundary);
   const url = new URL(`${endpoint(account.region)}/finances/v0/financialEvents`);
   if (payload.nextToken) url.searchParams.set("NextToken", payload.nextToken);
   else {
     url.searchParams.set("PostedAfter", payload.postedAfter);
     url.searchParams.set("PostedBefore", payload.postedBefore);
   }
-  const response = await spFetch(url.toString(), accessToken);
+  const response = await spFetch(url.toString(), accessToken, boundary);
   if (!response.ok) throw new Error(`Amazon Finances API failed (HTTP ${response.status}).`);
   const body = (await response.json()) as {
     payload?: { FinancialEvents?: { RefundEventList?: Array<Record<string, unknown>> }; NextToken?: string };

@@ -31,6 +31,10 @@ export interface GenerationOptions {
   correlationId?: string;
   workspaceId?: string;
   feature?: string;
+  /** Absolute epoch deadline inherited from a durable worker invocation. */
+  deadlineAt?: number;
+  /** Cancels provider work when the enclosing job loses its execution lease. */
+  signal?: AbortSignal;
 }
 
 export interface GenerationResult {

@@ -4,6 +4,8 @@ export interface AIRequestContext {
   userId: string;
   workspaceId: string;
   feature: string;
+  deadlineAt?: number;
+  signal?: AbortSignal;
 }
 
 const storage = new AsyncLocalStorage<AIRequestContext>();

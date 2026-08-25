@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { readCredential } from "@/lib/integrations/credentials";
+import { createRequestSignal, type ExecutionBoundary } from "@/lib/execution-deadline";
 
 export type AmazonProvider = "amazon_sp_api" | "amazon_ads";
 
@@ -117,6 +118,7 @@ export async function readAmazonCredentialSet(
 
 export async function exchangeLwaRefreshToken(
   credentials: Pick<AmazonCredentialSet, "clientId" | "clientSecret" | "refreshToken">,
+  boundary: ExecutionBoundary = {},
 ): Promise<string> {
   if (!credentials.refreshToken) {
     throw new Error("Amazon authorization is incomplete. Reconnect the account.");
@@ -131,7 +133,7 @@ export async function exchangeLwaRefreshToken(
       client_secret: credentials.clientSecret,
       refresh_token: credentials.refreshToken,
     }),
-    signal: AbortSignal.timeout(15_000),
+    signal: createRequestSignal(boundary, 15_000),
     cache: "no-store",
   });
 

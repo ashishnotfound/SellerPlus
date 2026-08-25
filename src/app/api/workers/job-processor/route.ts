@@ -13,19 +13,26 @@ import { getJobEntry, JobContext } from "@/lib/jobs/job-registry";
 import { WorkerRegistry } from "@/lib/automation/workers/registry";
 import { log } from "@/lib/logger";
 import { runWithAIRequestContext } from "@/lib/ai/request-context";
+import {
+  ExecutionDeadlineError,
+  runBeforeDeadline,
+} from "@/lib/execution-deadline";
 
 export const maxDuration = 60;
 
-const BATCH_SIZE = 5;
+const CLAIM_BATCH_SIZE = 1;
+const PERSISTENCE_RESERVE_MS = 8_000;
 
 export async function GET(request: Request): Promise<NextResponse> {
+  const routeStartedAt = Date.now();
+  const executionDeadlineAt = routeStartedAt + maxDuration * 1_000 - PERSISTENCE_RESERVE_MS;
   try {
     const { supabaseAdmin: adminClient } = await authenticateCron(request);
     const workerName = process.env.SELLERPLUS_WORKER_ID || "web-job-processor";
 
     // 1. Atomically claim jobs using SKIP LOCKED
     const { data: jobs, error: claimError } = await adminClient.rpc("claim_jobs", {
-      batch_size: BATCH_SIZE,
+      batch_size: CLAIM_BATCH_SIZE,
       worker_name: workerName,
       lock_timeout_seconds: 300,
     });
@@ -64,6 +71,7 @@ export async function GET(request: Request): Promise<NextResponse> {
 
       try {
         const startTime = Date.now();
+        const controller = new AbortController();
         log.info(`[JobProcessor] Executing "${jobType}" job ${jobId}`, undefined, {
           userId: job.user_id,
           jobType,
@@ -79,14 +87,22 @@ export async function GET(request: Request): Promise<NextResponse> {
             payload: job.payload || {},
             supabaseAdmin: adminClient,
             scheduleId: job.schedule_id,
+            deadlineAt: executionDeadlineAt,
+            signal: controller.signal,
           };
-          const handlerResult = await runWithAIRequestContext(
-            {
-              userId: job.user_id,
-              workspaceId: job.workspace_id,
-              feature: `job:${jobType}`,
-            },
-            () => biRegistryEntry.handler(ctx),
+          const handlerResult = await runBeforeDeadline(
+            () => runWithAIRequestContext(
+              {
+                userId: job.user_id,
+                workspaceId: job.workspace_id,
+                feature: `job:${jobType}`,
+                deadlineAt: executionDeadlineAt,
+                signal: controller.signal,
+              },
+              () => biRegistryEntry.handler(ctx),
+            ),
+            executionDeadlineAt,
+            controller,
           );
 
           if (handlerResult.continuation) {
@@ -134,7 +150,20 @@ export async function GET(request: Request): Promise<NextResponse> {
         // 3b. Execute Event Bus Worker
         else if (eventWorker) {
           // Event worker payload is the full emitted event
-          await eventWorker.processJob(job.payload);
+          await runBeforeDeadline(
+            () => runWithAIRequestContext(
+              {
+                userId: job.user_id,
+                workspaceId: job.workspace_id,
+                feature: `job:${jobType}`,
+                deadlineAt: executionDeadlineAt,
+                signal: controller.signal,
+              },
+              () => eventWorker.processJob(job.payload),
+            ),
+            executionDeadlineAt,
+            controller,
+          );
 
           await adminClient
             .from("jobs")
@@ -158,7 +187,9 @@ export async function GET(request: Request): Promise<NextResponse> {
         results.push({ jobId, status: "completed", jobType });
 
       } catch (err) {
-        const errorMessage = err instanceof Error ? err.message : "Unknown worker failure";
+        const errorMessage = err instanceof ExecutionDeadlineError
+          ? "Worker execution deadline reached; the job will continue on a later invocation."
+          : err instanceof Error ? err.message : "Unknown worker failure";
         const currentAttempts = job.attempts + 1;
         const maxAttempts = job.max_attempts;
         const shouldRetry = currentAttempts < maxAttempts;

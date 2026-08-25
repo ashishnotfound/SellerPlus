@@ -6,6 +6,11 @@ import {
   getAmazonMarketplaceAccount,
   readAmazonCredentialSet,
 } from "@/lib/amazon/credentials";
+import {
+  abortableDelay,
+  createRequestSignal,
+  type ExecutionBoundary,
+} from "@/lib/execution-deadline";
 
 const payloadSchema = z.object({
   marketplaceAccountId: z.string().uuid(),
@@ -45,16 +50,21 @@ function retryDelay(response: Response, attempt: number): number {
   return Math.min(500 * 2 ** attempt + Math.floor(Math.random() * 250), 10_000);
 }
 
-async function amazonFetch(url: string, init: RequestInit, attempts = 5): Promise<Response> {
+async function amazonFetch(
+  url: string,
+  init: RequestInit,
+  boundary: ExecutionBoundary,
+  attempts = 5,
+): Promise<Response> {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const response = await fetch(url, {
       ...init,
       cache: "no-store",
-      signal: AbortSignal.timeout(20_000),
+      signal: createRequestSignal(boundary, 20_000),
     });
     if (response.status !== 429 && response.status < 500) return response;
     if (attempt === attempts - 1) return response;
-    await new Promise((resolve) => setTimeout(resolve, retryDelay(response, attempt)));
+    await abortableDelay(retryDelay(response, attempt), boundary, 1_000);
   }
   throw new Error("Amazon Ads request exhausted its retry policy.");
 }
@@ -64,6 +74,7 @@ async function resolveProfileId(
   clientId: string,
   accessToken: string,
   marketplaceId: string,
+  boundary: ExecutionBoundary,
 ): Promise<string> {
   const response = await amazonFetch(`${endpoint}/v2/profiles`, {
     headers: {
@@ -71,7 +82,7 @@ async function resolveProfileId(
       Authorization: `Bearer ${accessToken}`,
       Accept: "application/json",
     },
-  });
+  }, boundary);
   if (!response.ok) {
     throw new Error(`Amazon Ads profiles could not be loaded (HTTP ${response.status}).`);
   }
@@ -106,6 +117,7 @@ async function requestReport(
   headers: Record<string, string>,
   startDate: string,
   endDate: string,
+  boundary: ExecutionBoundary,
 ): Promise<string> {
   const response = await amazonFetch(`${endpoint}/reporting/reports`, {
     method: "POST",
@@ -126,7 +138,7 @@ async function requestReport(
         format: "GZIP_JSON",
       },
     }),
-  });
+  }, boundary);
   if (!response.ok) {
     throw new Error(`Amazon Ads rejected the report request (HTTP ${response.status}).`);
   }
@@ -137,7 +149,10 @@ async function requestReport(
   return payload.reportId;
 }
 
-async function downloadReport(url: string): Promise<Array<Record<string, unknown>>> {
+async function downloadReport(
+  url: string,
+  boundary: ExecutionBoundary,
+): Promise<Array<Record<string, unknown>>> {
   const parsed = new URL(url);
   const trustedHost =
     parsed.protocol === "https:" &&
@@ -148,7 +163,7 @@ async function downloadReport(url: string): Promise<Array<Record<string, unknown
 
   const response = await fetch(parsed, {
     cache: "no-store",
-    signal: AbortSignal.timeout(45_000),
+    signal: createRequestSignal(boundary, 45_000),
     redirect: "error",
   });
   if (!response.ok) throw new Error(`Amazon Ads report download failed (HTTP ${response.status}).`);
@@ -280,16 +295,23 @@ export async function runAmazonAdsSync(ctx: JobContext): Promise<JobHandlerResul
     account.id,
     "amazon_ads",
   );
-  const accessToken = await exchangeLwaRefreshToken(credentials);
+  const boundary = { signal: ctx.signal, deadlineAt: ctx.deadlineAt };
+  const accessToken = await exchangeLwaRefreshToken(credentials, boundary);
   const endpoint = adsEndpoint(account.region);
   const profileId =
     payload.profileId ??
     (typeof account.metadata.adsProfileId === "string" ? account.metadata.adsProfileId : undefined) ??
-    (await resolveProfileId(endpoint, credentials.clientId, accessToken, account.marketplaceId));
+    (await resolveProfileId(endpoint, credentials.clientId, accessToken, account.marketplaceId, boundary));
   const headers = reportHeaders(credentials.clientId, accessToken, profileId);
 
   if (!payload.reportId) {
-    const reportId = await requestReport(endpoint, headers, payload.startDate, payload.endDate);
+    const reportId = await requestReport(
+      endpoint,
+      headers,
+      payload.startDate,
+      payload.endDate,
+      boundary,
+    );
     await ctx.supabaseAdmin
       .from("marketplace_accounts")
       .update({
@@ -312,7 +334,7 @@ export async function runAmazonAdsSync(ctx: JobContext): Promise<JobHandlerResul
 
   const statusResponse = await amazonFetch(`${endpoint}/reporting/reports/${encodeURIComponent(payload.reportId)}`, {
     headers,
-  });
+  }, boundary);
   if (!statusResponse.ok) {
     throw new Error(`Amazon Ads report status failed (HTTP ${statusResponse.status}).`);
   }
@@ -335,7 +357,7 @@ export async function runAmazonAdsSync(ctx: JobContext): Promise<JobHandlerResul
     throw new Error(`Amazon Ads report failed${report.failureReason ? `: ${report.failureReason}` : "."}`);
   }
 
-  const rows = await downloadReport(report.url);
+  const rows = await downloadReport(report.url, boundary);
   const configuredCurrency = typeof account.metadata.currencyCode === "string"
     ? account.metadata.currencyCode.toUpperCase().slice(0, 3)
     : account.marketplaceId === "A21TJRUUN4KGV" ? "INR" : "UNK";

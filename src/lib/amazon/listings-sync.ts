@@ -6,6 +6,11 @@ import {
   getAmazonMarketplaceAccount,
   readAmazonCredentialSet,
 } from "@/lib/amazon/credentials";
+import {
+  abortableDelay,
+  createRequestSignal,
+  type ExecutionBoundary,
+} from "@/lib/execution-deadline";
 
 const payloadSchema = z.object({
   marketplaceAccountId: z.string().uuid(),
@@ -20,7 +25,12 @@ function endpoint(region: string): string {
   return "https://sellingpartnerapi-eu.amazon.com";
 }
 
-async function spFetch(url: string, accessToken: string, init: RequestInit = {}): Promise<Response> {
+async function spFetch(
+  url: string,
+  accessToken: string,
+  init: RequestInit = {},
+  boundary: ExecutionBoundary = {},
+): Promise<Response> {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const response = await fetch(url, {
       ...init,
@@ -30,7 +40,7 @@ async function spFetch(url: string, accessToken: string, init: RequestInit = {})
         ...init.headers,
       },
       cache: "no-store",
-      signal: AbortSignal.timeout(20_000),
+      signal: createRequestSignal(boundary, 20_000),
     });
     if (response.status !== 429 && response.status < 500) return response;
     if (attempt === 4) return response;
@@ -38,7 +48,7 @@ async function spFetch(url: string, accessToken: string, init: RequestInit = {})
     const delay = Number.isFinite(retryAfter)
       ? Math.min(retryAfter * 1_000, 30_000)
       : Math.min(750 * 2 ** attempt + Math.floor(Math.random() * 250), 12_000);
-    await new Promise((resolve) => setTimeout(resolve, delay));
+    await abortableDelay(delay, boundary, 1_000);
   }
   throw new Error("Amazon SP-API request exhausted its retry policy.");
 }
@@ -61,7 +71,11 @@ function parseTsv(text: string): Array<Record<string, string>> {
   });
 }
 
-async function downloadDocument(url: string, compression?: string): Promise<string> {
+async function downloadDocument(
+  url: string,
+  compression: string | undefined,
+  boundary: ExecutionBoundary,
+): Promise<string> {
   const parsed = new URL(url);
   if (
     parsed.protocol !== "https:" ||
@@ -71,7 +85,11 @@ async function downloadDocument(url: string, compression?: string): Promise<stri
   ) {
     throw new Error("Amazon returned an untrusted listings report location.");
   }
-  const response = await fetch(parsed, { cache: "no-store", redirect: "error", signal: AbortSignal.timeout(45_000) });
+  const response = await fetch(parsed, {
+    cache: "no-store",
+    redirect: "error",
+    signal: createRequestSignal(boundary, 45_000),
+  });
   if (!response.ok) throw new Error(`Amazon listings report download failed (HTTP ${response.status}).`);
   const length = Number(response.headers.get("content-length") ?? 0);
   if (length > 75 * 1024 * 1024) throw new Error("Amazon listings report exceeds the 75 MB safety limit.");
@@ -139,7 +157,8 @@ export async function runAmazonListingsSync(ctx: JobContext): Promise<JobHandler
     account.id,
     "amazon_sp_api",
   );
-  const accessToken = await exchangeLwaRefreshToken(credentials);
+  const boundary = { signal: ctx.signal, deadlineAt: ctx.deadlineAt };
+  const accessToken = await exchangeLwaRefreshToken(credentials, boundary);
   const baseUrl = endpoint(account.region);
 
   if (!payload.reportId) {
@@ -150,7 +169,7 @@ export async function runAmazonListingsSync(ctx: JobContext): Promise<JobHandler
         reportType: "GET_MERCHANT_LISTINGS_ALL_DATA",
         marketplaceIds: [account.marketplaceId],
       }),
-    });
+    }, boundary);
     if (!response.ok) throw new Error(`Amazon rejected the listings report request (HTTP ${response.status}).`);
     const result = (await response.json()) as { reportId?: unknown };
     if (typeof result.reportId !== "string") throw new Error("Amazon did not return a listings report identifier.");
@@ -169,6 +188,8 @@ export async function runAmazonListingsSync(ctx: JobContext): Promise<JobHandler
   const statusResponse = await spFetch(
     `${baseUrl}/reports/2021-06-30/reports/${encodeURIComponent(payload.reportId)}`,
     accessToken,
+    {},
+    boundary,
   );
   if (!statusResponse.ok) throw new Error(`Amazon listings report status failed (HTTP ${statusResponse.status}).`);
   const status = (await statusResponse.json()) as { processingStatus?: string; reportDocumentId?: string };
@@ -192,11 +213,13 @@ export async function runAmazonListingsSync(ctx: JobContext): Promise<JobHandler
   const documentResponse = await spFetch(
     `${baseUrl}/reports/2021-06-30/documents/${encodeURIComponent(status.reportDocumentId)}`,
     accessToken,
+    {},
+    boundary,
   );
   if (!documentResponse.ok) throw new Error(`Amazon listings document lookup failed (HTTP ${documentResponse.status}).`);
   const document = (await documentResponse.json()) as { url?: string; compressionAlgorithm?: string };
   if (!document.url) throw new Error("Amazon did not return a listings report download URL.");
-  const items = parseTsv(await downloadDocument(document.url, document.compressionAlgorithm));
+  const items = parseTsv(await downloadDocument(document.url, document.compressionAlgorithm, boundary));
   const imported = await persistListings(ctx, account.id, account.marketplaceId, items);
   const now = new Date().toISOString();
   await ctx.supabaseAdmin.from("sync_checkpoints").upsert({

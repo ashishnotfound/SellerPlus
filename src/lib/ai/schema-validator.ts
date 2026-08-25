@@ -2,6 +2,15 @@ import { z } from "zod";
 import { routeLLMRequest, cleanJsonResponse } from "./utils";
 import { GenerationOptions, ProviderCapability } from "./types";
 import { log } from "@/lib/logger";
+import { ExecutionDeadlineError } from "@/lib/execution-deadline";
+import { AIBudgetError } from "@/lib/ai/budget";
+
+class StructuredOutputError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "StructuredOutputError";
+  }
+}
 
 /**
  * Executes an LLM request, expects JSON output, validates it against a Zod schema,
@@ -37,8 +46,10 @@ export async function generateValidatedJson<T>(
       let parsedJson: unknown;
       try {
         parsedJson = JSON.parse(cleanedText);
-      } catch (parseErr: any) {
-        throw new Error(`JSON Parsing failed: ${parseErr.message}`);
+      } catch (parseError) {
+        throw new StructuredOutputError(
+          `JSON parsing failed: ${parseError instanceof Error ? parseError.message : "invalid JSON"}`,
+        );
       }
 
       // 4. Validate with Zod
@@ -47,16 +58,23 @@ export async function generateValidatedJson<T>(
         return validationResult.data;
       } else {
         // Zod validation failed
-        throw new Error(`Schema validation failed: ${validationResult.error.message}`);
+        throw new StructuredOutputError(`Schema validation failed: ${validationResult.error.message}`);
       }
 
-    } catch (err: any) {
+    } catch (error) {
+      if (
+        !(error instanceof StructuredOutputError) ||
+        error instanceof ExecutionDeadlineError ||
+        error instanceof AIBudgetError
+      ) {
+        throw error;
+      }
       attempt++;
-      log.warn(`[SchemaValidator] Attempt ${attempt} failed: ${err.message}`, finalOptions.correlationId);
+      log.warn(`[SchemaValidator] Attempt ${attempt} failed: ${error.message}`, finalOptions.correlationId);
 
       if (attempt > maxRepairs) {
-        log.error(`[SchemaValidator] Exhausted max repairs (${maxRepairs}). Final error: ${err.message}`, finalOptions.correlationId, { repairs: attempt, failed: true });
-        throw new Error(`Failed to generate valid JSON after ${maxRepairs} repair attempts: ${err.message}`);
+        log.error(`[SchemaValidator] Exhausted max repairs (${maxRepairs}). Final error: ${error.message}`, finalOptions.correlationId, { repairs: attempt, failed: true });
+        throw new Error(`Failed to generate valid JSON after ${maxRepairs} repair attempts: ${error.message}`);
       }
 
       log.warn(`[SchemaValidator] Auto-repair attempt ${attempt}/${maxRepairs} initiated due to validation failure.`, finalOptions.correlationId, { repairs: attempt });
@@ -64,7 +82,7 @@ export async function generateValidatedJson<T>(
       // Construct a repair prompt
       currentPrompt = `
 You previously returned an invalid JSON response.
-Error details: ${err.message}
+Error details: ${error.message}
 
 Please repair your previous response and return ONLY valid JSON matching the required schema. Do not include markdown fences or any conversational text.
 
