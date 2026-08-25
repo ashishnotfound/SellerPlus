@@ -1,19 +1,18 @@
 import { NextResponse } from "next/server";
-import { authenticateWithDevFallback, authErrorResponse } from "@/lib/auth-middleware";
+import { authenticate, authErrorResponse, requirePermission } from "@/lib/auth-middleware";
 import { RiskRadar } from "@/lib/ai/risk-radar";
 import { log } from "@/lib/logger";
 
-export const maxDuration = 60;
-
 export async function GET(req: Request) {
   try {
-    const user = await authenticateWithDevFallback(req);
+    const user = await authenticate(req);
+    requirePermission(user, "finance.read");
 
     log.info(`[API/Risks] Scanning for business risks`, undefined, {
       userId: user.userId,
     });
 
-    const response = await RiskRadar.scan(user.userId);
+    const response = await RiskRadar.scan(user.userId, user.workspaceId);
 
     return NextResponse.json({ success: true, data: response });
   } catch (error) {

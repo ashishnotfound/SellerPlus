@@ -3,16 +3,9 @@
 import React, { useState, useMemo } from "react";
 import { GlassCard } from "@/components/glass-card";
 import { useAnalyticsStore } from "@/hooks/use-analytics-store";
-import { cn, formatCurrency } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import {
-  TrendingUp,
   Search,
-  ArrowUpDown,
-  Tag,
-  Percent,
-  RefreshCw,
-  Eye,
-  AlertCircle,
   Package,
 } from "lucide-react";
 
@@ -20,12 +13,10 @@ type SortOption = "highest_profit" | "lowest_profit" | "highest_sales" | "worst_
 
 export default function ProductPerformancePage() {
   const getProductAnalytics = useAnalyticsStore((s) => s.getProductAnalytics);
-  const dateRange = useAnalyticsStore((s) => s.dateRange);
-  const setDateRange = useAnalyticsStore((s) => s.setDateRange);
   const [searchQuery, setSearchQuery] = useState("");
   const [sortBy, setSortBy] = useState<SortOption>("highest_profit");
 
-  const productData = useMemo(() => getProductAnalytics(), [dateRange, getProductAnalytics]);
+  const productData = useMemo(() => getProductAnalytics(), [getProductAnalytics]);
 
   // Apply search query and sort rules
   const processedProducts = useMemo(() => {
@@ -73,31 +64,9 @@ export default function ProductPerformancePage() {
           </p>
         </div>
 
-        {/* Date presets */}
-        <div className="flex items-center gap-1 rounded-xl bg-white/5 p-1 border border-white/5 overflow-x-auto max-w-[90vw] sm:max-w-none">
-          {([
-            { key: "today", label: "Today" },
-            { key: "yesterday", label: "Yesterday" },
-            { key: "last_7d", label: "7 Days" },
-            { key: "last_30d", label: "30 Days" },
-            { key: "this_month", label: "This Month" },
-            { key: "last_month", label: "Last Month" },
-            { key: "lifetime", label: "Lifetime" },
-          ] as const).map((range) => (
-            <button
-              key={range.key}
-              onClick={() => setDateRange(range.key)}
-              className={cn(
-                "px-3 py-1.5 rounded-lg text-xs font-semibold uppercase transition-all whitespace-nowrap",
-                dateRange === range.key
-                  ? "bg-indigo-500 text-white"
-                  : "text-zinc-400 hover:text-white hover:bg-white/5"
-              )}
-            >
-              {range.label}
-            </button>
-          ))}
-        </div>
+        <span className="rounded-lg border border-white/5 bg-white/[0.03] px-3 py-1.5 text-[10px] font-bold uppercase text-zinc-500">
+          Rolling 30-day listing aggregates
+        </span>
       </div>
 
       {/* Control bar */}

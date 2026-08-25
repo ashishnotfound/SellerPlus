@@ -7,10 +7,12 @@
  */
 
 import { NextResponse } from "next/server";
-import { authenticateCron, authErrorResponse, getAdminClient } from "@/lib/auth-middleware";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { authenticateCron, authErrorResponse } from "@/lib/auth-middleware";
 import { getJobEntry, JobContext } from "@/lib/jobs/job-registry";
 import { WorkerRegistry } from "@/lib/automation/workers/registry";
 import { log } from "@/lib/logger";
+import { runWithAIRequestContext } from "@/lib/ai/request-context";
 
 export const maxDuration = 60;
 
@@ -18,12 +20,14 @@ const BATCH_SIZE = 5;
 
 export async function GET(request: Request): Promise<NextResponse> {
   try {
-    authenticateCron(request);
-    const adminClient = getAdminClient();
+    const { supabaseAdmin: adminClient } = await authenticateCron(request);
+    const workerName = process.env.SELLERPLUS_WORKER_ID || "web-job-processor";
 
     // 1. Atomically claim jobs using SKIP LOCKED
     const { data: jobs, error: claimError } = await adminClient.rpc("claim_jobs", {
       batch_size: BATCH_SIZE,
+      worker_name: workerName,
+      lock_timeout_seconds: 300,
     });
 
     if (claimError) {
@@ -41,6 +45,12 @@ export async function GET(request: Request): Promise<NextResponse> {
     for (const job of jobs) {
       const jobId = job.id;
       const jobType = job.job_type;
+
+      if (!job.workspace_id || !job.user_id) {
+        await failJob(adminClient, job, "Job is missing its tenant or user owner.");
+        results.push({ jobId, status: "failed", jobType });
+        continue;
+      }
       
       const biRegistryEntry = getJobEntry(jobType);
       const eventWorker = WorkerRegistry[jobType];
@@ -65,21 +75,55 @@ export async function GET(request: Request): Promise<NextResponse> {
           const ctx: JobContext = {
             jobId,
             userId: job.user_id,
+            workspaceId: job.workspace_id,
             payload: job.payload || {},
             supabaseAdmin: adminClient,
             scheduleId: job.schedule_id,
           };
-          const handlerResult = await biRegistryEntry.handler(ctx);
+          const handlerResult = await runWithAIRequestContext(
+            {
+              userId: job.user_id,
+              workspaceId: job.workspace_id,
+              feature: `job:${jobType}`,
+            },
+            () => biRegistryEntry.handler(ctx),
+          );
+
+          if (handlerResult.continuation) {
+            const resumeAt = new Date(
+              Date.now() + Math.max(5, handlerResult.continuation.delaySeconds) * 1_000,
+            ).toISOString();
+            await adminClient
+              .from("jobs")
+              .update({
+                status: "waiting",
+                payload: handlerResult.continuation.payload,
+                progress: Math.min(99, Math.max(0, handlerResult.continuation.progress)),
+                result: { summary: handlerResult.continuation.summary },
+                run_at: resumeAt,
+                locked_by: null,
+                locked_until: null,
+              })
+              .eq("id", jobId)
+              .eq("workspace_id", job.workspace_id);
+
+            results.push({ jobId, status: "waiting", jobType });
+            continue;
+          }
           
           await adminClient
             .from("jobs")
             .update({
               status: "completed",
               result: handlerResult.output,
+              progress: 100,
               completed_at: new Date().toISOString(),
-              attempts: job.attempts + 1
+              attempts: job.attempts + 1,
+              locked_by: null,
+              locked_until: null,
             })
-            .eq("id", jobId);
+            .eq("id", jobId)
+            .eq("workspace_id", job.workspace_id);
 
           log.info(`[JobProcessor] Job ${jobId} completed`, undefined, {
             jobType,
@@ -96,10 +140,14 @@ export async function GET(request: Request): Promise<NextResponse> {
             .from("jobs")
             .update({
               status: "completed",
+              progress: 100,
               completed_at: new Date().toISOString(),
-              attempts: job.attempts + 1
+              attempts: job.attempts + 1,
+              locked_by: null,
+              locked_until: null,
             })
-            .eq("id", jobId);
+            .eq("id", jobId)
+            .eq("workspace_id", job.workspace_id);
 
           log.info(`[JobProcessor] Job ${jobId} completed`, undefined, {
             jobType,
@@ -109,7 +157,8 @@ export async function GET(request: Request): Promise<NextResponse> {
 
         results.push({ jobId, status: "completed", jobType });
 
-      } catch (err: any) {
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : "Unknown worker failure";
         const currentAttempts = job.attempts + 1;
         const maxAttempts = job.max_attempts;
         const shouldRetry = currentAttempts < maxAttempts;
@@ -118,7 +167,7 @@ export async function GET(request: Request): Promise<NextResponse> {
         let newStatus = "failed";
         
         if (shouldRetry) {
-          newStatus = "pending";
+          newStatus = "retrying";
           // Exponential backoff: 2^attempts * 5 minutes
           const delayMinutes = Math.pow(2, currentAttempts - 1) * 5;
           const nextRun = new Date();
@@ -127,12 +176,12 @@ export async function GET(request: Request): Promise<NextResponse> {
         }
 
         log.error(`[JobProcessor] Job ${jobId} failed (attempt ${currentAttempts}/${maxAttempts})`, undefined, {
-          jobId, jobType, error: err.message, willRetry: shouldRetry
+          jobId, jobType, error: errorMessage, willRetry: shouldRetry
         });
 
         // Append to error log
         const errorLog = Array.isArray(job.error_log) ? job.error_log : [];
-        errorLog.push({ attempt: currentAttempts, error: err.message, time: new Date().toISOString() });
+        errorLog.push({ attempt: currentAttempts, error: errorMessage, time: new Date().toISOString() });
 
         await adminClient
           .from("jobs")
@@ -141,9 +190,13 @@ export async function GET(request: Request): Promise<NextResponse> {
             attempts: currentAttempts,
             run_at: runAt || job.run_at,
             error_log: errorLog,
+            last_error: errorMessage,
+            locked_by: null,
+            locked_until: null,
             completed_at: shouldRetry ? null : new Date().toISOString(),
           })
-          .eq("id", jobId);
+          .eq("id", jobId)
+          .eq("workspace_id", job.workspace_id);
 
         results.push({ jobId, status: shouldRetry ? "requeued" : "failed", jobType });
       }
@@ -159,7 +212,14 @@ export async function GET(request: Request): Promise<NextResponse> {
   }
 }
 
-async function failJob(adminClient: any, job: any, errorMessage: string) {
+interface ClaimedJob {
+  id: string;
+  workspace_id?: string;
+  attempts: number;
+  error_log?: unknown;
+}
+
+async function failJob(adminClient: SupabaseClient, job: ClaimedJob, errorMessage: string) {
   const errorLog = Array.isArray(job.error_log) ? job.error_log : [];
   errorLog.push({ attempt: job.attempts + 1, error: errorMessage, time: new Date().toISOString() });
   
@@ -169,7 +229,11 @@ async function failJob(adminClient: any, job: any, errorMessage: string) {
       status: "failed",
       attempts: job.attempts + 1,
       error_log: errorLog,
+      last_error: errorMessage,
+      locked_by: null,
+      locked_until: null,
       completed_at: new Date().toISOString(),
     })
-    .eq("id", job.id);
+    .eq("id", job.id)
+    .eq("workspace_id", job.workspace_id);
 }

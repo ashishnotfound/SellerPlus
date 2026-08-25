@@ -1,18 +1,21 @@
 import { NextResponse } from "next/server";
 import { sendNotification } from "@/lib/notifications";
-import { authenticateWithDevFallback, authErrorResponse } from "@/lib/auth-middleware";
+import { z } from "zod";
+import { authenticate, authErrorResponse, requirePermission } from "@/lib/auth-middleware";
+
+const inputSchema = z.object({
+  provider: z.enum(["email", "discord", "telegram"]),
+  email: z.string().email().max(320).optional(),
+  webhookUrl: z.string().url().max(2_000).optional(),
+  botToken: z.string().min(20).max(256).optional(),
+  chatId: z.string().min(1).max(128).optional(),
+}).strict();
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
-    const { provider, email, webhookUrl, botToken, chatId, userId: bodyUserId } = body;
-
-    // Verify authenticated user context
-    const { userId } = await authenticateWithDevFallback(request, bodyUserId);
-
-    if (!provider) {
-      return NextResponse.json({ success: false, error: "Missing provider field" }, { status: 400 });
-    }
+    const actor = await authenticate(request);
+    requirePermission(actor, "settings.manage");
+    const { provider, email, webhookUrl, botToken, chatId } = inputSchema.parse(await request.json());
 
     const testPayload = {
       title: "SellerPlus OS Connection Test",
@@ -33,10 +36,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: "Unsupported channel type" }, { status: 400 });
     }
 
-    // Extract status of tested channel
     const status = result[provider as keyof typeof result];
-    if (status && !status.success) {
-      return NextResponse.json({ success: false, error: status.error });
+    if (!status?.success) {
+      return NextResponse.json({ success: false, error: status?.error ?? "Provider did not return a delivery result." }, { status: 502 });
     }
 
     return NextResponse.json({ 
@@ -46,6 +48,9 @@ export async function POST(request: Request) {
     });
 
   } catch (error: any) {
+    if (error instanceof z.ZodError) {
+      return NextResponse.json({ success: false, error: error.issues[0]?.message ?? "Invalid request." }, { status: 400 });
+    }
     const authErr = authErrorResponse(error);
     if (error?.name === "AuthError") {
       return NextResponse.json({ success: false, error: authErr.body.error }, { status: authErr.status });

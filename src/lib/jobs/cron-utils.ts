@@ -21,6 +21,39 @@ export const PRESET_SCHEDULES: Record<string, { label: string; cron: string }> =
 
 export type PresetScheduleKey = keyof typeof PRESET_SCHEDULES;
 
+const CRON_FIELD_RANGES = [
+  [0, 59],
+  [0, 23],
+  [1, 31],
+  [1, 12],
+  [0, 6],
+] as const;
+
+export function isPresetScheduleKey(value: string): value is PresetScheduleKey {
+  return Object.prototype.hasOwnProperty.call(PRESET_SCHEDULES, value);
+}
+
+/** Validate the deliberately small cron grammar supported by this service. */
+export function validateCronExpression(cronExpression: string): void {
+  const parts = cronExpression.trim().split(/\s+/);
+  if (parts.length !== 5) {
+    throw new Error(`Invalid cron expression "${cronExpression}": expected 5 fields.`);
+  }
+
+  parts.forEach((field, index) => {
+    const [min, max] = CRON_FIELD_RANGES[index];
+    if (field === "*") return;
+    if (/^\*\/\d+$/.test(field)) {
+      const step = Number(field.slice(2));
+      if (step >= 1 && step <= max - min + 1) return;
+    } else if (/^\d+$/.test(field)) {
+      const value = Number(field);
+      if (value >= min && value <= max) return;
+    }
+    throw new Error(`Invalid cron field "${field}" in "${cronExpression}".`);
+  });
+}
+
 /**
  * Parse a 5-field cron string and return the next Date it will fire
  * after the reference time (default: now).
@@ -34,10 +67,11 @@ export type PresetScheduleKey = keyof typeof PRESET_SCHEDULES;
  * These can be added if required without breaking existing callers.
  */
 export function nextCronRunAfter(cronExpression: string, after: Date = new Date()): Date {
-  const parts = cronExpression.trim().split(/\s+/);
-  if (parts.length !== 5) {
-    throw new Error(`Invalid cron expression "${cronExpression}": expected 5 fields.`);
+  if (Number.isNaN(after.getTime())) {
+    throw new Error("Cannot calculate a schedule from an invalid reference date.");
   }
+  validateCronExpression(cronExpression);
+  const parts = cronExpression.trim().split(/\s+/);
 
   const [minuteExpr, hourExpr, domExpr, monthExpr, dowExpr] = parts;
 
@@ -72,19 +106,16 @@ function matchesCronField(expr: string, value: number, min: number, max: number)
     return (value - min) % step === 0;
   }
 
-  const n = parseInt(expr, 10);
-  if (isNaN(n)) return false;
+  const n = Number(expr);
+  if (!Number.isInteger(n) || n < min || n > max) return false;
   return value === n;
 }
 
 /** Resolve a preset key or raw cron string to a cron expression. */
 export function resolveCronExpression(scheduleOrPreset: string): string {
-  if (scheduleOrPreset in PRESET_SCHEDULES) {
-    return PRESET_SCHEDULES[scheduleOrPreset as PresetScheduleKey].cron;
+  if (isPresetScheduleKey(scheduleOrPreset)) {
+    return PRESET_SCHEDULES[scheduleOrPreset].cron;
   }
-  // Validate it looks like a cron expression
-  if (scheduleOrPreset.trim().split(/\s+/).length === 5) {
-    return scheduleOrPreset;
-  }
-  throw new Error(`"${scheduleOrPreset}" is neither a known preset nor a valid 5-field cron expression.`);
+  validateCronExpression(scheduleOrPreset);
+  return scheduleOrPreset;
 }

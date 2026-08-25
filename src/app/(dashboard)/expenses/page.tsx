@@ -1,13 +1,13 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { GlassCard } from "@/components/glass-card";
 import { useAuth } from "@/hooks/use-auth";
-import { supabase } from "@/lib/supabase";
+import { sellerplusApiFetch } from "@/lib/client/api-fetch";
 import { formatCurrency } from "@/lib/utils";
 import {
   DollarSign, Plus, Trash2, Edit3, Save, Loader2,
-  Calendar, CreditCard, PieChart, Info, AlertTriangle, X
+  Calendar, CreditCard, PieChart, X
 } from "lucide-react";
 import { useToastStore } from "@/hooks/use-toast-store";
 
@@ -21,6 +21,14 @@ interface Expense {
   is_recurring: boolean;
   recurrence_interval: "daily" | "weekly" | "monthly" | "yearly" | null;
   created_at: string;
+  version: number;
+}
+
+interface ExpenseSummary {
+  total: number;
+  recurring: number;
+  oneOff: number;
+  categories: Record<string, number>;
 }
 
 const CATEGORY_ICONS: Record<string, string> = {
@@ -49,26 +57,33 @@ export default function ExpensesPage() {
   const [isRecurring, setIsRecurring] = useState(false);
   const [recurrenceInterval, setRecurrenceInterval] = useState<"daily" | "weekly" | "monthly" | "yearly">("monthly");
   const [saving, setSaving] = useState(false);
+  const [summary, setSummary] = useState<ExpenseSummary>({ total: 0, recurring: 0, oneOff: 0, categories: {} });
+  const [totalRows, setTotalRows] = useState(0);
+  const [page, setPage] = useState(1);
+  const pageSize = 50;
+
+  const apiRequest = useCallback(async (path: string, init?: RequestInit) => {
+    const response = await sellerplusApiFetch(path, init);
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error || "Expense request failed.");
+    return body;
+  }, []);
 
   useEffect(() => {
     if (user?.id) {
       loadExpenses();
     }
-  }, [user?.id]);
+  }, [page, user?.id, user?.workspaceId]);
 
   const loadExpenses = async () => {
     setLoading(true);
     try {
-      const { data, error } = await supabase
-        .from("expenses")
-        .select("*")
-        .eq("user_id", user?.id)
-        .order("date", { ascending: false });
-
-      if (error) throw error;
-      setExpenses(data || []);
-    } catch (e) {
-      console.error("Failed to load expenses:", e);
+      const body = await apiRequest(`/api/expenses?page=${page}&limit=${pageSize}`);
+      setExpenses(body.data?.rows ?? []);
+      setSummary(body.data?.summary ?? { total: 0, recurring: 0, oneOff: 0, categories: {} });
+      setTotalRows(Number(body.data?.total ?? 0));
+    } catch (error) {
+      useToastStore.getState().error("Expenses unavailable", error instanceof Error ? error.message : "Try again later.");
     } finally {
       setLoading(false);
     }
@@ -102,9 +117,10 @@ export default function ExpensesPage() {
     setSaving(true);
 
     const payload = {
-      user_id: user.id,
+      id: editingExpense?.id ?? null,
+      expectedVersion: editingExpense?.version ?? null,
       category,
-      amount: parseFloat(amount) || 0,
+      amount: Number(amount),
       currency: "INR",
       description: description.trim(),
       date,
@@ -113,20 +129,10 @@ export default function ExpensesPage() {
     };
 
     try {
-      if (editingExpense) {
-        const { error } = await supabase
-          .from("expenses")
-          .update(payload)
-          .eq("id", editingExpense.id);
-        if (error) throw error;
-      } else {
-        const { error } = await supabase
-          .from("expenses")
-          .insert(payload);
-        if (error) throw error;
-      }
+      await apiRequest("/api/expenses", { method: "POST", body: JSON.stringify(payload) });
       setShowFormModal(false);
-      loadExpenses();
+      await loadExpenses();
+      useToastStore.getState().success(editingExpense ? "Expense updated" : "Expense logged", "The expense ledger and audit trail were updated.");
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Unknown error";
       useToastStore.getState().error("Save Failed", msg);
@@ -135,40 +141,24 @@ export default function ExpensesPage() {
     }
   };
 
-  const handleDeleteExpense = async (id: string) => {
+  const handleDeleteExpense = async (expense: Expense) => {
     if (!confirm("Are you sure you want to delete this expense ledger item?")) return;
     try {
-      const { error } = await supabase
-        .from("expenses")
-        .delete()
-        .eq("id", id);
-      if (error) throw error;
-      loadExpenses();
+      await apiRequest(`/api/expenses?id=${encodeURIComponent(expense.id)}&version=${expense.version}`, { method: "DELETE" });
+      await loadExpenses();
+      useToastStore.getState().success("Expense removed", "The entry was soft-deleted and remains auditable.");
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Unknown error";
       useToastStore.getState().error("Delete Failed", msg);
     }
   };
 
-  // Summary Metrics calculations
-  const metrics = useMemo(() => {
-    let total = 0;
-    let recurringTotal = 0;
-    let oneOffTotal = 0;
-    const catMap: Record<string, number> = {};
-
-    expenses.forEach((e) => {
-      total += e.amount;
-      if (e.is_recurring) {
-        recurringTotal += e.amount;
-      } else {
-        oneOffTotal += e.amount;
-      }
-      catMap[e.category] = (catMap[e.category] || 0) + e.amount;
-    });
-
-    return { total, recurringTotal, oneOffTotal, categories: catMap };
-  }, [expenses]);
+  const metrics = {
+    total: Number(summary.total),
+    recurringTotal: Number(summary.recurring),
+    oneOffTotal: Number(summary.oneOff),
+    categories: summary.categories,
+  };
 
   return (
     <div className="flex flex-col gap-8 p-6 max-w-7xl mx-auto">
@@ -328,7 +318,7 @@ export default function ExpensesPage() {
                             <button onClick={() => handleOpenEdit(e)} className="p-1 hover:bg-white/5 rounded text-zinc-500 hover:text-white">
                               <Edit3 className="w-3.5 h-3.5" />
                             </button>
-                            <button onClick={() => handleDeleteExpense(e.id)} className="p-1 hover:bg-white/5 rounded text-zinc-500 hover:text-rose-400">
+                            <button onClick={() => handleDeleteExpense(e)} className="p-1 hover:bg-white/5 rounded text-zinc-500 hover:text-rose-400">
                               <Trash2 className="w-3.5 h-3.5" />
                             </button>
                           </div>
@@ -342,6 +332,16 @@ export default function ExpensesPage() {
           </GlassCard>
         </div>
       </div>
+
+      {totalRows > pageSize && (
+        <div className="flex items-center justify-between text-xs text-zinc-500">
+          <span>Page {page} of {Math.ceil(totalRows / pageSize)} · {totalRows} expense entries</span>
+          <div className="flex gap-2">
+            <button type="button" disabled={page === 1} onClick={() => setPage((value) => Math.max(1, value - 1))} className="rounded-md border border-white/10 px-3 py-1.5 text-zinc-300 disabled:opacity-40">Previous</button>
+            <button type="button" disabled={page * pageSize >= totalRows} onClick={() => setPage((value) => value + 1)} className="rounded-md border border-white/10 px-3 py-1.5 text-zinc-300 disabled:opacity-40">Next</button>
+          </div>
+        </div>
+      )}
 
       {/* --- Log/Modify Expense Modal --- */}
       {showFormModal && (

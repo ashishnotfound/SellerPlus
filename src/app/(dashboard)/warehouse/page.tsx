@@ -12,6 +12,7 @@ import {
 import { cn } from "@/lib/utils";
 import { buildPackingSlipData, formatShippingAddress } from "@/lib/warehouse/packing-slip";
 import type { WarehouseOrder } from "@/lib/warehouse/types";
+import { sellerplusApiFetch } from "@/lib/client/api-fetch";
 
 // ─── Status helpers ───────────────────────────────────────────────────────────
 
@@ -122,11 +123,11 @@ function OrderCard({ order, selected, onSelect, onStatusUpdate, updating }: Orde
     if (!el) return;
     const win = window.open("", "_blank");
     if (!win) return;
-    win.document.write(`
-      <html><head><title>Packing Slip — ${order.channel_order_id}</title>
-      <style>body{font-family:system-ui,sans-serif;padding:32px;color:#000}table{width:100%;border-collapse:collapse}</style>
-      </head><body>${el.innerHTML}</body></html>`);
-    win.document.close();
+    win.document.title = `Packing Slip — ${order.channel_order_id}`;
+    const style = win.document.createElement("style");
+    style.textContent = "body{font-family:system-ui,sans-serif;padding:32px;color:#000}table{width:100%;border-collapse:collapse}";
+    win.document.head.append(style);
+    win.document.body.replaceChildren(el.cloneNode(true));
     win.print();
     win.close();
   };
@@ -294,7 +295,7 @@ export default function WarehousePage() {
     else setLoading(true);
 
     try {
-      const res = await fetch(`/api/warehouse/orders?status=${statusFilter}&limit=100`);
+      const res = await sellerplusApiFetch(`/api/warehouse/orders?status=${statusFilter}&limit=100`);
       if (!res.ok) {
         const e = await res.json().catch(() => ({ error: "Unknown error" }));
         showError("Failed to load orders", e.error ?? "");
@@ -321,18 +322,13 @@ export default function WarehousePage() {
   ) => {
     if (isOffline) {
       enqueueAction("pack_order", { orderId, status: newStatus, note });
-      // Optimistically update
-      setOrders((prev) =>
-        prev.map((o) => (o.id === orderId ? { ...o, status: newStatus } : o))
-      );
       return;
     }
 
     setUpdatingIds((prev) => new Set(prev).add(orderId));
     try {
-      const res = await fetch(`/api/warehouse/${orderId}/status`, {
+      const res = await sellerplusApiFetch(`/api/warehouse/${orderId}/status`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ newStatus, note }),
       });
       const json = await res.json().catch(() => ({}));

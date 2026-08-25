@@ -1,17 +1,8 @@
-/**
- * Orders Analytics Hook
- * 
- * Fetches real order data from Supabase and computes live analytics.
- * All metrics are derived strictly from the orders and order_items tables.
- * No fabricated, estimated, or placeholder values.
- */
-
 "use client";
 
-import { useState, useEffect, useMemo, useCallback } from "react";
-import { supabase } from "@/lib/supabase";
-
-// ─── Types ───────────────────────────────────────────────────────────
+import { useCallback, useEffect, useState } from "react";
+import { sellerplusApiFetch } from "@/lib/client/api-fetch";
+import { useAuth } from "@/hooks/use-auth";
 
 export interface OrderRecord {
   id: string;
@@ -25,13 +16,18 @@ export interface OrderRecord {
   marketplace_id: string | null;
   buyer_name: string | null;
   shipping_address_state: string | null;
+  shipping_address?: Record<string, unknown> | null;
   number_of_items_shipped: number;
   number_of_items_unshipped: number;
-  net_profit?: number;
-  gross_profit?: number;
-  commission_fees?: number;
-  fba_fees?: number;
-  shipping_cost?: number;
+  net_profit: number | null;
+  gross_profit: number | null;
+  commission_fees: number | null;
+  fba_fees: number | null;
+  shipping_cost: number | null;
+  profit_calculation_status: "unavailable" | "partial" | "complete";
+  notes: string | null;
+  version: number;
+  data_source: string;
   created_at: string;
 }
 
@@ -46,7 +42,7 @@ export interface JoinedListing {
   cost_profile_id: string | null;
 }
 
-export interface OrderItemRecord {
+export interface OrderItemWithProduct {
   id: string;
   order_id: string;
   seller_sku: string | null;
@@ -56,282 +52,206 @@ export interface OrderItemRecord {
   quantity_shipped: number;
   item_price: number;
   listing_id?: string | null;
-  listing?: JoinedListing | null;
-}
-
-export interface OrderItemWithProduct extends OrderItemRecord {
   channel_order_id: string;
   status: string;
   purchase_date: string | null;
   fulfillment_channel: string | null;
   marketplace_id: string | null;
   listing: JoinedListing | null;
-  cogs: number;
-  profit: number;
-  margin: number;
+  cogs: null;
+  profit: null;
+  margin: null;
 }
 
 export interface OrdersAnalytics {
-  // Core KPIs
   totalRevenue: number;
-  totalProfit: number;
+  totalProfit: number | null;
+  profitCoverage: number;
   totalOrders: number;
   totalUnitsSold: number;
   averageOrderValue: number;
-
-  // Status breakdowns
   pendingShipments: number;
   cancelledOrders: number;
   cancelledRevenue: number;
   shippedOrders: number;
-
-  // Top sellers
   topSellingSkus: Array<{ sku: string; title: string; unitsSold: number; revenue: number }>;
-
-  // Recent orders for table display
   recentOrders: OrderRecord[];
   recentOrderItems: OrderItemWithProduct[];
-
-  // Daily breakdown for charts
-  ordersPerDay: Array<{ date: string; dayLabel: string; orders: number; revenue: number; profit: number }>;
+  ordersPerDay: Array<{ date: string; dayLabel: string; orders: number; revenue: number; profit: number | null }>;
 }
 
-// ─── Hook ────────────────────────────────────────────────────────────
+export interface OrdersQuery {
+  page?: number;
+  pageSize?: number;
+  search?: string;
+  status?: string;
+  marketplace?: string;
+  start?: string;
+  end?: string;
+  sort?: "purchase_date" | "total_amount";
+  ascending?: boolean;
+}
 
-export function useOrdersAnalytics(userId: string | undefined) {
-  const [orders, setOrders] = useState<OrderRecord[]>([]);
-  const [orderItems, setOrderItems] = useState<OrderItemRecord[]>([]);
-  const [profiles, setProfiles] = useState<any[]>([]);
-  const [listings, setListings] = useState<any[]>([]);
+const emptyAnalytics: OrdersAnalytics = {
+  totalRevenue: 0,
+  totalProfit: null,
+  profitCoverage: 0,
+  totalOrders: 0,
+  totalUnitsSold: 0,
+  averageOrderValue: 0,
+  pendingShipments: 0,
+  cancelledOrders: 0,
+  cancelledRevenue: 0,
+  shippedOrders: 0,
+  topSellingSkus: [],
+  recentOrders: [],
+  recentOrderItems: [],
+  ordersPerDay: [],
+};
+
+function numberValue(value: unknown): number {
+  const number = Number(value ?? 0);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function mapOrder(row: Record<string, unknown>): OrderRecord {
+  const address = row.shipping_address && typeof row.shipping_address === "object"
+    ? row.shipping_address as Record<string, unknown>
+    : null;
+  return {
+    ...row,
+    id: String(row.id),
+    channel_order_id: String(row.channel_order_id ?? ""),
+    status: String(row.status ?? "unknown"),
+    total_amount: numberValue(row.total_amount),
+    currency: String(row.currency ?? "INR"),
+    purchase_date: typeof row.purchase_date === "string" ? row.purchase_date : null,
+    last_update_date: typeof row.last_update_date === "string" ? row.last_update_date : null,
+    fulfillment_channel: typeof row.fulfillment_channel === "string" ? row.fulfillment_channel : null,
+    marketplace_id: typeof row.marketplace_id === "string" ? row.marketplace_id : null,
+    buyer_name: typeof row.buyer_name === "string" ? row.buyer_name : null,
+    shipping_address_state: typeof address?.StateOrRegion === "string" ? address.StateOrRegion : null,
+    shipping_address: address,
+    number_of_items_shipped: numberValue(row.number_of_items_shipped),
+    number_of_items_unshipped: numberValue(row.number_of_items_unshipped),
+    net_profit: row.net_profit == null ? null : numberValue(row.net_profit),
+    gross_profit: row.gross_profit == null ? null : numberValue(row.gross_profit),
+    commission_fees: row.commission_fees == null ? null : numberValue(row.commission_fees),
+    fba_fees: row.fba_fees == null ? null : numberValue(row.fba_fees),
+    shipping_cost: row.shipping_cost == null ? null : numberValue(row.shipping_cost),
+    profit_calculation_status: ["partial", "complete"].includes(String(row.profit_calculation_status))
+      ? String(row.profit_calculation_status) as "partial" | "complete"
+      : "unavailable",
+    notes: typeof row.notes === "string" ? row.notes : null,
+    version: Math.max(1, numberValue(row.version)),
+    data_source: String(row.data_source ?? "unknown"),
+    created_at: String(row.created_at ?? ""),
+  };
+}
+
+function mapItem(row: Record<string, any>): OrderItemWithProduct {
+  const relation = Array.isArray(row.listing) ? row.listing[0] : row.listing;
+  return {
+    ...row,
+    id: String(row.id),
+    order_id: String(row.order_id),
+    seller_sku: typeof row.seller_sku === "string" ? row.seller_sku : null,
+    asin: typeof row.asin === "string" ? row.asin : null,
+    title: typeof row.title === "string" ? row.title : null,
+    quantity_ordered: numberValue(row.quantity_ordered),
+    quantity_shipped: numberValue(row.quantity_shipped),
+    item_price: numberValue(row.item_price),
+    channel_order_id: String(row.channel_order_id ?? "—"),
+    status: String(row.status ?? "—"),
+    purchase_date: typeof row.purchase_date === "string" ? row.purchase_date : null,
+    fulfillment_channel: typeof row.fulfillment_channel === "string" ? row.fulfillment_channel : null,
+    marketplace_id: typeof row.marketplace_id === "string" ? row.marketplace_id : null,
+    listing: relation ?? null,
+    cogs: null,
+    profit: null,
+    margin: null,
+  };
+}
+
+export function useOrdersAnalytics(userId: string | undefined, query: OrdersQuery = {}) {
+  const workspaceId = useAuth((state) => state.user?.workspaceId);
+  const [analytics, setAnalytics] = useState<OrdersAnalytics>(emptyAnalytics);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
+  const [total, setTotal] = useState(0);
+
+  const page = query.page ?? 1;
+  const pageSize = query.pageSize ?? 50;
+  const search = query.search?.trim() ?? "";
+  const status = query.status ?? "";
+  const marketplace = query.marketplace ?? "";
+  const start = query.start ?? "";
+  const end = query.end ?? "";
+  const sort = query.sort ?? "purchase_date";
+  const ascending = query.ascending ?? false;
 
   const fetchOrders = useCallback(async () => {
-    if (!userId) return;
+    if (!userId) {
+      setAnalytics(emptyAnalytics);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
-
+    setError(null);
     try {
-      // Fetch all orders for this user
-      const { data: ordersData, error: ordersError } = await supabase
-        .from("orders")
-        .select("*")
-        .eq("user_id", userId)
-        .eq("channel", "amazon")
-        .order("purchase_date", { ascending: false });
+      const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize), sort, ascending: String(ascending) });
+      if (search) params.set("search", search);
+      if (status) params.set("status", status);
+      if (marketplace) params.set("marketplace", marketplace);
+      if (start) params.set("start", start);
+      if (end) params.set("end", end);
+      const response = await sellerplusApiFetch(`/api/orders?${params.toString()}`);
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Orders are unavailable.");
 
-      if (ordersError) {
-        console.error("[OrdersAnalytics] Failed to fetch orders:", ordersError);
-        setLoading(false);
-        return;
-      }
-
-      const fetchedOrders: OrderRecord[] = ordersData || [];
-      setOrders(fetchedOrders);
-
-      if (fetchedOrders.length > 0) {
-        setLastSyncedAt(fetchedOrders[0].last_update_date || fetchedOrders[0].created_at);
-      }
-
-      // Fetch listings & profiles context for COGS calculation and fallback joins
-      const { data: listingsData } = await supabase
-        .from("listings")
-        .select("id, title, main_image, price, asin, sku, brand, cost_profile_id")
-        .eq("user_id", userId);
-      setListings(listingsData || []);
-
-      const { data: profilesData } = await supabase
-        .from("cost_profiles")
-        .select("*")
-        .eq("user_id", userId);
-      setProfiles(profilesData || []);
-
-      // Fetch all order items for these orders
-      const orderIds = fetchedOrders.map(o => o.id);
-      if (orderIds.length > 0) {
-        // Supabase has a limit on IN queries, batch if needed
-        const batchSize = 100;
-        const allItems: OrderItemRecord[] = [];
-
-        for (let i = 0; i < orderIds.length; i += batchSize) {
-          const batch = orderIds.slice(i, i + batchSize);
-          const { data: itemsData } = await supabase
-            .from("order_items")
-            .select(`
-              *,
-              listing:listings(
-                id,
-                title,
-                main_image,
-                price,
-                asin,
-                sku,
-                brand,
-                cost_profile_id
-              )
-            `)
-            .in("order_id", batch);
-
-          if (itemsData) {
-            const mapped = itemsData.map((item: any) => {
-              let matched = item.listing;
-              if (!matched && listingsData) {
-                matched = listingsData.find((l: any) => 
-                  (item.seller_sku && l.sku === item.seller_sku) ||
-                  (item.asin && l.asin === item.asin)
-                );
-              }
-              return {
-                ...item,
-                listing: matched || null
-              };
-            });
-            allItems.push(...mapped);
-          }
-        }
-        setOrderItems(allItems);
-      }
-    } catch (e) {
-      console.error("[OrdersAnalytics] Fetch error:", e);
+      const rawAnalytics = payload.analytics ?? {};
+      const mappedOrders = (payload.data ?? []).map(mapOrder);
+      const mappedItems = (payload.items ?? []).map(mapItem);
+      setAnalytics({
+        totalRevenue: numberValue(rawAnalytics.totalRevenue),
+        totalProfit: rawAnalytics.totalProfit == null ? null : numberValue(rawAnalytics.totalProfit),
+        profitCoverage: numberValue(rawAnalytics.profitCoverage),
+        totalOrders: numberValue(rawAnalytics.totalOrders),
+        totalUnitsSold: numberValue(rawAnalytics.totalUnitsSold),
+        averageOrderValue: numberValue(rawAnalytics.averageOrderValue),
+        pendingShipments: numberValue(rawAnalytics.pendingShipments),
+        cancelledOrders: numberValue(rawAnalytics.cancelledOrders),
+        cancelledRevenue: numberValue(rawAnalytics.cancelledRevenue),
+        shippedOrders: numberValue(rawAnalytics.shippedOrders),
+        topSellingSkus: (rawAnalytics.topSellingSkus ?? []).map((item: Record<string, unknown>) => ({
+          sku: String(item.sku ?? "Unknown"), title: String(item.title ?? item.sku ?? "Unknown"),
+          unitsSold: numberValue(item.unitsSold), revenue: numberValue(item.revenue),
+        })),
+        ordersPerDay: (rawAnalytics.ordersPerDay ?? []).map((item: Record<string, unknown>) => ({
+          date: String(item.date),
+          dayLabel: new Date(`${String(item.date)}T00:00:00Z`).toLocaleDateString("en", { weekday: "short", timeZone: "UTC" }),
+          orders: numberValue(item.orders), revenue: numberValue(item.revenue),
+          profit: item.profit == null ? null : numberValue(item.profit),
+        })),
+        recentOrders: mappedOrders,
+        recentOrderItems: mappedItems,
+      });
+      setTotal(numberValue(payload.pagination?.total));
+      setLastSyncedAt(payload.freshness?.last_succeeded_at ?? null);
+    } catch (caught) {
+      setAnalytics(emptyAnalytics);
+      setTotal(0);
+      setError(caught instanceof Error ? caught.message : "Orders are unavailable.");
     } finally {
       setLoading(false);
     }
-  }, [userId]);
+  }, [userId, workspaceId, page, pageSize, search, status, marketplace, start, end, sort, ascending]);
 
   useEffect(() => {
-    fetchOrders();
+    const timeout = window.setTimeout(() => void fetchOrders(), 250);
+    return () => window.clearTimeout(timeout);
   }, [fetchOrders]);
 
-  const analytics: OrdersAnalytics = useMemo(() => {
-    // Only count orders with valid (non-cancelled) statuses for revenue
-    const validRevenueStatuses = ["Shipped", "shipped", "delivered", "Unshipped", "PartiallyShipped"];
-    const cancelledStatuses = ["Canceled", "cancelled"];
-    const pendingStatuses = ["Unshipped", "pending", "Pending", "PendingAvailability", "InvoiceUnconfirmed"];
-    const shippedStatuses = ["Shipped", "shipped", "delivered", "PartiallyShipped"];
-
-    // Revenue: sum total_amount for non-cancelled orders
-    const revenueOrders = orders.filter(o => !cancelledStatuses.includes(o.status));
-    const totalRevenue = revenueOrders.reduce((sum, o) => sum + Number(o.total_amount || 0), 0);
-    const totalProfit = revenueOrders.reduce((sum, o) => sum + Number(o.net_profit || 0), 0);
-
-    const totalOrders = orders.length;
-
-    // Units sold: sum quantity_ordered from order items tied to non-cancelled orders
-    // In sandbox, QuantityOrdered is 0, so we default to at least 1 unit per item ordered
-    const cancelledOrderIds = new Set(orders.filter(o => cancelledStatuses.includes(o.status)).map(o => o.id));
-    const validItems = orderItems.filter(item => !cancelledOrderIds.has(item.order_id));
-    const totalUnitsSold = validItems.reduce((sum, item) => sum + Math.max(1, item.quantity_ordered || 0), 0);
-
-    const averageOrderValue = revenueOrders.length > 0 ? totalRevenue / revenueOrders.length : 0;
-
-    const pendingShipments = orders.filter(o => pendingStatuses.includes(o.status)).length;
-    const cancelledOrders = orders.filter(o => cancelledStatuses.includes(o.status)).length;
-    const cancelledOrdersList = orders.filter(o => cancelledStatuses.includes(o.status));
-    const cancelledRevenue = cancelledOrdersList.reduce((sum, o) => sum + Number(o.total_amount || 0), 0);
-    const shippedOrders = orders.filter(o => shippedStatuses.includes(o.status)).length;
-
-    // Top-selling SKUs: group order items by seller_sku
-    const skuMap = new Map<string, { sku: string; title: string; unitsSold: number; revenue: number }>();
-    for (const item of validItems) {
-      const sku = item.seller_sku || "Unknown";
-      const existing = skuMap.get(sku);
-      if (existing) {
-        existing.unitsSold += Math.max(1, item.quantity_ordered || 0);
-        existing.revenue += Number(item.item_price || 0);
-      } else {
-        skuMap.set(sku, {
-          sku,
-          title: item.title || sku,
-          unitsSold: Math.max(1, item.quantity_ordered || 0),
-          revenue: Number(item.item_price || 0),
-        });
-      }
-    }
-    const topSellingSkus = Array.from(skuMap.values())
-      .sort((a, b) => b.unitsSold - a.unitsSold)
-      .slice(0, 10);
-
-    // Recent orders: already sorted by purchase_date desc
-    const recentOrders = orders.slice(0, 15);
-
-    const getUnitCogs = (listing: any) => {
-      if (!listing || !listing.cost_profile_id) return 0;
-      const profile = profiles.find(p => p.id === listing.cost_profile_id);
-      if (!profile) return 0;
-      return (
-        parseFloat(profile.printing_cost || 0) +
-        parseFloat(profile.material_cost || 0) +
-        parseFloat(profile.packaging_cost || 0) +
-        parseFloat(profile.shipping_cost || 0) +
-        parseFloat(profile.labor_cost || 0) +
-        parseFloat(profile.misc_cost || 0)
-      );
-    };
-
-    const recentOrderIds = new Set(recentOrders.map(o => o.id));
-    const recentItems = orderItems.filter(item => recentOrderIds.has(item.order_id));
-
-    const recentOrderItems: OrderItemWithProduct[] = recentItems.map((item) => {
-      const parentOrder = orders.find(o => o.id === item.order_id);
-      const unitCogs = getUnitCogs(item.listing);
-      const qty = Math.max(1, item.quantity_ordered || 0);
-      const revenue = Number(item.item_price || 0);
-      const totalCogs = unitCogs * qty;
-      const profit = revenue - totalCogs;
-      const margin = revenue > 0 ? (profit / revenue) * 100 : 0;
-
-      return {
-        ...item,
-        channel_order_id: parentOrder?.channel_order_id || "—",
-        status: parentOrder?.status || "—",
-        purchase_date: parentOrder?.purchase_date || null,
-        fulfillment_channel: parentOrder?.fulfillment_channel || null,
-        marketplace_id: parentOrder?.marketplace_id || null,
-        cogs: totalCogs,
-        profit,
-        margin
-      } as OrderItemWithProduct;
-    });
-
-    // Orders per day (last 7 days)
-    const weekdayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-    const last7Days: Array<{ date: string; dayLabel: string; orders: number; revenue: number; profit: number }> = [];
-
-    for (let i = 6; i >= 0; i--) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      const dateStr = d.toISOString().split("T")[0];
-      const dayLabel = weekdayNames[d.getDay()];
-
-      const dayOrders = orders.filter(o => {
-        const orderDate = o.purchase_date ? o.purchase_date.split("T")[0] : null;
-        return orderDate === dateStr && !cancelledStatuses.includes(o.status);
-      });
-
-      last7Days.push({
-        date: dateStr,
-        dayLabel,
-        orders: dayOrders.length,
-        revenue: dayOrders.reduce((sum, o) => sum + Number(o.total_amount || 0), 0),
-        profit: dayOrders.reduce((sum, o) => sum + Number(o.net_profit || 0), 0),
-      });
-    }
-
-    return {
-      totalRevenue,
-      totalProfit,
-      totalOrders,
-      totalUnitsSold,
-      averageOrderValue,
-      pendingShipments,
-      cancelledOrders,
-      cancelledRevenue,
-      shippedOrders,
-      topSellingSkus,
-      recentOrders,
-      recentOrderItems,
-      ordersPerDay: last7Days,
-    };
-  }, [orders, orderItems, profiles, listings]);
-
-  return { analytics, loading, lastSyncedAt, refetch: fetchOrders };
+  return { analytics, loading, error, lastSyncedAt, total, page, pageSize, refetch: fetchOrders };
 }

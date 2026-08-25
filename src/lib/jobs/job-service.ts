@@ -7,12 +7,22 @@
  * only the concrete class changes — all callers stay the same.
  */
 
-import { getAdminClient } from "@/lib/auth-middleware";
+import { getAdminClient } from "@/lib/supabase/admin";
 import { log } from "@/lib/logger";
 
 // ─── Shared Types ─────────────────────────────────────────────────────
 
-export type JobStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
+export type JobStatus =
+  | "queued"
+  | "pending"
+  | "assigned"
+  | "running"
+  | "waiting"
+  | "retrying"
+  | "approval_required"
+  | "completed"
+  | "failed"
+  | "canceled";
 
 export interface EnqueuedJob<T = Record<string, unknown>> {
   /** Job type identifier — must match a JobRegistry key */
@@ -20,15 +30,19 @@ export interface EnqueuedJob<T = Record<string, unknown>> {
   /** Serializable job payload */
   payload: T;
   /** The user this job belongs to */
-  userId?: string;
+  userId: string;
   /** The workspace this job belongs to */
-  workspaceId?: string;
+  workspaceId: string;
   /** Lower number = processed first. Default 5. */
   priority?: number;
   /** Override default max retry attempts. Default 3. */
   maxAttempts?: number;
   /** Optional reference to the ai_schedule that triggered this job */
   scheduleId?: string;
+  /** Required for jobs that can cause an external side effect. */
+  idempotencyKey?: string;
+  /** Serializes jobs that mutate the same external resource. */
+  resourceKey?: string;
 }
 
 export interface JobResult {
@@ -40,7 +54,7 @@ export interface JobResult {
 
 export interface JobService {
   enqueue<T>(job: EnqueuedJob<T>): Promise<JobResult>;
-  getStatus(jobId: string): Promise<JobStatus | null>;
+  getStatus(workspaceId: string, jobId: string): Promise<JobStatus | null>;
 }
 
 // ─── Supabase Postgres Implementation ────────────────────────────────
@@ -66,11 +80,25 @@ export class SupabaseJobService implements JobService {
         },
         priority: job.priority ?? 5,
         max_attempts: job.maxAttempts ?? 3,
-        status: "pending", // Unified queue uses 'pending' instead of 'queued'
+        status: "queued",
         schedule_id: job.scheduleId,
+        idempotency_key: job.idempotencyKey,
+        resource_key: job.resourceKey,
       })
       .select("id")
       .single();
+
+    if (error?.code === "23505" && job.idempotencyKey) {
+      const { data: existing } = await adminClient
+        .from("jobs")
+        .select("id, status")
+        .eq("workspace_id", job.workspaceId)
+        .eq("idempotency_key", job.idempotencyKey)
+        .maybeSingle();
+      if (existing) {
+        return { jobId: existing.id, status: existing.status as JobStatus };
+      }
+    }
 
     if (error || !data) {
       log.error(`[JobService] Failed to enqueue job type=${job.type}: ${error?.message}`);
@@ -83,19 +111,20 @@ export class SupabaseJobService implements JobService {
       type: job.type,
     });
 
-    return { jobId: data.id, status: "pending" };
+    return { jobId: data.id, status: "queued" };
   }
 
   /**
    * Fetches the current status of a job by ID.
    */
-  async getStatus(jobId: string): Promise<JobStatus | null> {
+  async getStatus(workspaceId: string, jobId: string): Promise<JobStatus | null> {
     const adminClient = getAdminClient();
 
     const { data } = await adminClient
       .from("jobs")
       .select("status")
       .eq("id", jobId)
+      .eq("workspace_id", workspaceId)
       .maybeSingle();
 
     return (data?.status as JobStatus) ?? null;

@@ -1,160 +1,92 @@
 import { NextResponse } from "next/server";
-import { authenticateWithDevFallback, authErrorResponse } from "@/lib/auth-middleware";
+import { z } from "zod";
+import {
+  authenticate,
+  authErrorResponse,
+  requirePermission,
+} from "@/lib/auth-middleware";
+import {
+  exchangeLwaRefreshToken,
+  getAmazonMarketplaceAccount,
+  readAmazonCredentialSet,
+} from "@/lib/amazon/credentials";
+
+const requestSchema = z.object({
+  asin: z.string().trim().toUpperCase().regex(/^[A-Z0-9]{10}$/),
+  marketplaceAccountId: z.string().uuid().optional(),
+}).strict();
+
+function spApiEndpoint(region: string): string {
+  const value = region.toLowerCase();
+  if (value.includes("north america")) return "https://sellingpartnerapi-na.amazon.com";
+  if (value.includes("far east")) return "https://sellingpartnerapi-fe.amazon.com";
+  return "https://sellingpartnerapi-eu.amazon.com";
+}
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
-    const { asin, userId: bodyUserId } = body;
-
-    const { userId, supabaseAdmin } = await authenticateWithDevFallback(request, bodyUserId);
-
-    if (!asin) {
-      return NextResponse.json({ error: "ASIN is required" }, { status: 400 });
+    const actor = await authenticate(request);
+    requirePermission(actor, "catalog.read");
+    const input = requestSchema.parse(await request.json());
+    const account = await getAmazonMarketplaceAccount(
+      actor.supabaseAdmin,
+      actor.workspaceId,
+      input.marketplaceAccountId,
+    );
+    if (!account.capabilities.includes("selling_partner")) {
+      return NextResponse.json({ error: "Amazon SP-API is not connected for this account.", code: "SP_API_NOT_CONNECTED" }, { status: 409 });
     }
-
-    // Fetch credentials from DB securely
-    const { data: connection, error: connError } = await supabaseAdmin
-      .from("amazon_connections")
-      .select("*")
-      .eq("user_id", userId)
-      .eq("is_active", true)
-      .maybeSingle();
-
-    if (connError || !connection) {
-      return NextResponse.json({ error: "No active Amazon connection found. Please connect your Amazon account in Settings." }, { status: 400 });
-    }
-
-    const { decryptToken } = await import("@/lib/encryption");
-    const clientId = decryptToken(connection.client_id);
-    const clientSecret = decryptToken(connection.client_secret);
-    const refreshToken = decryptToken(connection.refresh_token);
-    const region = connection.marketplace;
-    const sandbox = connection.is_sandbox;
-
-    if (!clientId || !clientSecret || !refreshToken) {
-      return NextResponse.json({ error: "Corrupted Amazon credentials in database." }, { status: 500 });
-    }
-
-    // 1. Exchange refresh token for LWA Access Token
-    const tokenUrl = "https://api.amazon.com/auth/o2/token";
-    const tokenRes = await fetch(tokenUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded"
-      },
-      body: new URLSearchParams({
-        grant_type: "refresh_token",
-        client_id: clientId.trim(),
-        client_secret: clientSecret.trim(),
-        refresh_token: refreshToken.trim()
-      })
+    const credentials = await readAmazonCredentialSet(
+      actor.supabaseAdmin,
+      actor.workspaceId,
+      account.id,
+      "amazon_sp_api",
+    );
+    const accessToken = await exchangeLwaRefreshToken(credentials);
+    const endpoint = spApiEndpoint(account.region);
+    const url = new URL(`${endpoint}/catalog/2022-04-01/items/${encodeURIComponent(input.asin)}`);
+    url.searchParams.set("marketplaceIds", account.marketplaceId);
+    url.searchParams.set("includedData", "summaries,attributes,images,productTypes,salesRanks");
+    const response = await fetch(url, {
+      headers: { "x-amz-access-token": accessToken, Accept: "application/json" },
+      cache: "no-store",
+      signal: AbortSignal.timeout(20_000),
     });
-
-    if (!tokenRes.ok) {
-      const errText = await tokenRes.text();
-      return NextResponse.json({ error: `Amazon Auth Exchange Failed: ${errText}` }, { status: 401 });
-    }
-
-    const tokenData = await tokenRes.json();
-    const accessToken = tokenData.access_token;
-
-    // 2. Resolve regional Selling Partner API endpoint and Marketplace ID
-    let spApiUrl = "https://sellingpartnerapi-eu.amazon.com"; // default to EU / India
-    let marketplaceId = "A21TJRUUN4KGV"; // default to India (amazon.in)
-
-    const normRegion = (region || "").toLowerCase();
-    if (normRegion.includes("us") || normRegion.includes("north america") || normRegion.includes("com")) {
-      spApiUrl = "https://sellingpartnerapi-na.amazon.com";
-      marketplaceId = "ATVPDKIKX0DER";
-    } else if (normRegion.includes("europe") || normRegion.includes("co.uk") || normRegion.includes("uk")) {
-      spApiUrl = "https://sellingpartnerapi-eu.amazon.com";
-      marketplaceId = "A1F83G8C2ARO7P"; // UK
-    } else if (normRegion.includes("far east") || normRegion.includes("japan") || normRegion.includes("jp")) {
-      spApiUrl = "https://sellingpartnerapi-fe.amazon.com";
-      marketplaceId = "A1VC38T7YXB528"; // Japan
-    }
-
-    if (sandbox) {
-      spApiUrl = spApiUrl.replace("https://", "https://sandbox.");
-    }
-
-    // 3. Fetch Catalog Item from SP-API
-    const catalogUrl = `${spApiUrl}/catalog/2022-04-01/items/${asin}?marketplaceIds=${marketplaceId}&includedData=summaries,attributes`;
-    
-    console.log("[SP-API Catalog Audit] Initiating Amazon SP-API Request:");
-    console.log(`  - Request URL: ${catalogUrl}`);
-    console.log(`  - Endpoint: /catalog/2022-04-01/items/${asin}`);
-    console.log(`  - Region: ${region || "Default (EU/IN)"}`);
-    console.log(`  - LWA Token Generation: SUCCESS`);
-    console.log(`  - Access Token (Prefix): ${accessToken ? accessToken.slice(0, 15) + "..." : "NONE"}`);
-
-    const catalogRes = await fetch(catalogUrl, {
-      method: "GET",
-      headers: {
-        "x-amz-access-token": accessToken,
-        "Accept": "application/json"
-      }
-    });
-
-    console.log(`[SP-API Catalog Audit] Amazon SP-API Response Status: ${catalogRes.status}`);
-
-    if (!catalogRes.ok) {
-      const errText = await catalogRes.text();
-      console.error("[SP-API Catalog Audit] Amazon SP-API Request FAILED!");
-      console.error(`  - HTTP Status: ${catalogRes.status}`);
-      console.error(`  - Response Body: ${errText}`);
-
-      let errJson = null;
-      try {
-        errJson = JSON.parse(errText);
-      } catch (_) {}
-
-      const firstError = errJson?.errors?.[0] || {};
-      const errorCode = firstError.code || "UnknownCode";
-      const errorMessage = firstError.message || "No error message provided";
-      const errorDetails = firstError.details || "No details provided";
-
+    if (!response.ok) {
       return NextResponse.json({
-        success: false,
-        error: `Amazon SP-API Catalog Fetch Failed (HTTP ${catalogRes.status})`,
-        rawError: {
-          status: catalogRes.status,
-          code: errorCode,
-          message: errorMessage,
-          details: errorDetails,
-          body: errText
-        }
-      }, { status: catalogRes.status });
+        error: response.status === 404
+          ? "Amazon did not find this ASIN in the selected marketplace."
+          : `Amazon Catalog Items API failed (HTTP ${response.status}).`,
+        code: "AMAZON_CATALOG_ERROR",
+      }, { status: response.status === 404 ? 404 : 502 });
     }
 
-    const catalogData = await catalogRes.json();
-    
-    // Parse values from SP-API Catalog Items response structure
-    const summary = catalogData.summaries?.[0] || {};
-    const attributes = catalogData.attributes || {};
-
-    // Try to resolve a description or bullet points from attributes
-    const bulletPoints = attributes.bullet_point?.map((bp: any) => bp.value) || [];
-    const description = attributes.product_description?.[0]?.value || bulletPoints.join(". ") || "";
-
+    const catalog = await response.json();
+    const summary = catalog.summaries?.[0] ?? {};
+    const attributes = catalog.attributes ?? {};
+    const bulletPoints = Array.isArray(attributes.bullet_point)
+      ? attributes.bullet_point.map((item: { value?: unknown }) => String(item.value ?? "")).filter(Boolean)
+      : [];
     return NextResponse.json({
-      success: true,
-      asin: catalogData.asin || asin,
-      title: summary.itemName || "",
-      brand: summary.brandName || "",
-      manufacturer: summary.manufacturerName || "",
-      productType: summary.productType || "",
-      imageUrl: summary.mainImage?.link || "",
-      description: description,
-      category: summary.classifications?.[0]?.displayName || ""
+      data: {
+        asin: catalog.asin ?? input.asin,
+        title: summary.itemName ?? "",
+        brand: summary.brandName ?? "",
+        manufacturer: summary.manufacturerName ?? "",
+        productType: summary.productType ?? catalog.productTypes?.[0]?.productType ?? "",
+        imageUrl: summary.mainImage?.link ?? catalog.images?.[0]?.images?.[0]?.link ?? "",
+        description: attributes.product_description?.[0]?.value ?? "",
+        bulletPoints,
+        category: summary.classifications?.[0]?.displayName ?? "",
+        source: "amazon_sp_api_catalog_items_2022_04_01",
+        marketplaceId: account.marketplaceId,
+      },
     });
-
-  } catch (error: any) {
-    const authErr = authErrorResponse(error);
-    if (error?.name === "AuthError") {
-      return NextResponse.json(authErr.body, { status: authErr.status });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return NextResponse.json({ error: "A valid 10-character ASIN is required.", code: "VALIDATION_ERROR" }, { status: 400 });
     }
-    console.error("API Error during Amazon catalog fetch:", error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    const response = authErrorResponse(error);
+    return NextResponse.json(response.body, { status: response.status });
   }
 }

@@ -16,12 +16,16 @@
  */
 
 import { SupabaseClient } from "@supabase/supabase-js";
+import type { JobType } from "@/lib/jobs/job-catalog";
+export { ALL_JOB_TYPES, SCHEDULABLE_JOB_TYPES, isSchedulableJobType } from "@/lib/jobs/job-catalog";
+export type { JobType } from "@/lib/jobs/job-catalog";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export interface JobContext {
   jobId: string;
   userId: string;
+  workspaceId: string;
   payload: Record<string, unknown>;
   supabaseAdmin: SupabaseClient;
   scheduleId?: string;
@@ -36,6 +40,17 @@ export interface JobHandlerResult {
   affectedEntities?: string[];
   /** Estimated AI token cost in USD */
   estimatedCostUsd?: number;
+  /**
+   * Durable continuation for asynchronous provider workflows. The processor
+   * persists the new payload and releases the lock instead of completing the
+   * job, so report polling never holds an HTTP request open.
+   */
+  continuation?: {
+    payload: Record<string, unknown>;
+    delaySeconds: number;
+    progress: number;
+    summary: string;
+  };
 }
 
 export type JobHandler = (ctx: JobContext) => Promise<JobHandlerResult>;
@@ -68,16 +83,6 @@ export interface JobRegistryEntry {
 
 // ─── Job Type Enum ───────────────────────────────────────────────────────────
 
-export type JobType =
-  | "bi_analysis"
-  | "executive_assistant"
-  | "audit_ads"
-  | "check_inventory"
-  | "generate_report"
-  | "create_listing_draft"
-  | "find_keywords"
-  | "detect_low_profit_asin";
-
 // ─── Handler Implementations ─────────────────────────────────────────────────
 // Each handler is a thin adapter — it calls the appropriate existing service
 // and returns a standardized JobHandlerResult.
@@ -87,7 +92,7 @@ async function handleBiAnalysis(ctx: JobContext): Promise<JobHandlerResult> {
   const mode = (ctx.payload.mode as string) || "Store Audit";
   const goal = (ctx.payload.goal as string) || "MAXIMIZE_PROFIT";
   const customPrompt = ctx.payload.customPrompt as string | undefined;
-  const result = await BIEngine.runAnalysis(ctx.userId, mode as any, goal, customPrompt);
+  const result = await BIEngine.runAnalysis(ctx.userId, ctx.workspaceId, mode as any, goal, customPrompt);
   return {
     output: result as unknown as Record<string, unknown>,
     summary: `${mode} complete — ${result.recommendations.length} recommendations generated.`,
@@ -98,7 +103,7 @@ async function handleBiAnalysis(ctx: JobContext): Promise<JobHandlerResult> {
 
 async function handleExecutiveAssistant(ctx: JobContext): Promise<JobHandlerResult> {
   const { BIEngine } = await import("@/lib/ai/bi-engine");
-  const result = await BIEngine.runAnalysis(ctx.userId, "Executive Summary", "MAXIMIZE_PROFIT");
+  const result = await BIEngine.runAnalysis(ctx.userId, ctx.workspaceId, "Executive Summary", "MAXIMIZE_PROFIT");
   return {
     output: result as unknown as Record<string, unknown>,
     summary: `Executive Report ready — ${result.recommendations.length} strategic actions identified.`,
@@ -109,7 +114,7 @@ async function handleExecutiveAssistant(ctx: JobContext): Promise<JobHandlerResu
 
 async function handleAuditAds(ctx: JobContext): Promise<JobHandlerResult> {
   const { BIEngine } = await import("@/lib/ai/bi-engine");
-  const result = await BIEngine.runAnalysis(ctx.userId, "Advertising Audit", "REDUCE_ACOS");
+  const result = await BIEngine.runAnalysis(ctx.userId, ctx.workspaceId, "Advertising Audit", "REDUCE_ACOS");
   return {
     output: result as unknown as Record<string, unknown>,
     summary: `Ads Audit complete — ${result.recommendations.length} PPC optimisations found.`,
@@ -119,7 +124,7 @@ async function handleAuditAds(ctx: JobContext): Promise<JobHandlerResult> {
 
 async function handleCheckInventory(ctx: JobContext): Promise<JobHandlerResult> {
   const { BIEngine } = await import("@/lib/ai/bi-engine");
-  const result = await BIEngine.runAnalysis(ctx.userId, "Inventory Audit", "PREVENT_STOCKOUT");
+  const result = await BIEngine.runAnalysis(ctx.userId, ctx.workspaceId, "Inventory Audit", "PREVENT_STOCKOUT");
   return {
     output: result as unknown as Record<string, unknown>,
     summary: `Inventory scan complete — ${result.recommendations.length} stock alerts.`,
@@ -129,7 +134,7 @@ async function handleCheckInventory(ctx: JobContext): Promise<JobHandlerResult> 
 
 async function handleGenerateReport(ctx: JobContext): Promise<JobHandlerResult> {
   const { BIEngine } = await import("@/lib/ai/bi-engine");
-  const result = await BIEngine.runAnalysis(ctx.userId, "Store Audit", "MAXIMIZE_PROFIT");
+  const result = await BIEngine.runAnalysis(ctx.userId, ctx.workspaceId, "Store Audit", "MAXIMIZE_PROFIT");
   return {
     output: result as unknown as Record<string, unknown>,
     summary: `Weekly Business Report generated — ${result.widgets.length} dashboard widgets.`,
@@ -139,7 +144,7 @@ async function handleGenerateReport(ctx: JobContext): Promise<JobHandlerResult> 
 
 async function handleCreateListingDraft(ctx: JobContext): Promise<JobHandlerResult> {
   const { generateListingDraft } = await import("@/lib/ai/listing-draft");
-  const result = await generateListingDraft(ctx.userId, ctx.payload, ctx.supabaseAdmin);
+  const result = await generateListingDraft(ctx.userId, ctx.workspaceId, ctx.payload, ctx.supabaseAdmin);
   return {
     output: { listingId: result.listingId, title: result.title },
     summary: `Listing draft "${result.title}" created. Review before publishing.`,
@@ -166,11 +171,49 @@ async function handleFindKeywords(ctx: JobContext): Promise<JobHandlerResult> {
 
 async function handleDetectLowProfitAsin(ctx: JobContext): Promise<JobHandlerResult> {
   const { BIEngine } = await import("@/lib/ai/bi-engine");
-  const result = await BIEngine.runAnalysis(ctx.userId, "Store Audit", "ELIMINATE_LOSS_MAKERS");
+  const result = await BIEngine.runAnalysis(ctx.userId, ctx.workspaceId, "Store Audit", "ELIMINATE_LOSS_MAKERS");
   return {
     output: result as unknown as Record<string, unknown>,
     summary: `Profit leak scan complete — ${result.recommendations.length} ASINs flagged.`,
     estimatedCostUsd: 0.002,
+  };
+}
+
+async function handleAmazonAdsSync(ctx: JobContext): Promise<JobHandlerResult> {
+  const { runAmazonAdsSync } = await import("@/lib/amazon/ads-sync");
+  return runAmazonAdsSync(ctx);
+}
+
+async function handleAmazonListingsSync(ctx: JobContext): Promise<JobHandlerResult> {
+  const { runAmazonListingsSync } = await import("@/lib/amazon/listings-sync");
+  return runAmazonListingsSync(ctx);
+}
+
+async function handleAmazonOrdersSync(ctx: JobContext): Promise<JobHandlerResult> {
+  const { runAmazonOrdersSync } = await import("@/lib/amazon/orders-sync");
+  return runAmazonOrdersSync(ctx);
+}
+
+async function handleAmazonRefundsSync(ctx: JobContext): Promise<JobHandlerResult> {
+  const { runAmazonRefundsSync } = await import("@/lib/amazon/refunds-sync");
+  return runAmazonRefundsSync(ctx);
+}
+
+async function handleApplyCostChange(ctx: JobContext): Promise<JobHandlerResult> {
+  const proposalId = ctx.payload.proposalId;
+  if (typeof proposalId !== "string") {
+    throw new Error("Cost change job is missing its proposal ID.");
+  }
+  const { data, error } = await ctx.supabaseAdmin.rpc("execute_cost_change_proposal", {
+    p_workspace_id: ctx.workspaceId,
+    p_proposal_id: proposalId,
+    p_executor_id: ctx.jobId,
+  });
+  if (error) throw error;
+  return {
+    output: (data ?? {}) as Record<string, unknown>,
+    summary: "Approved cost configuration change applied.",
+    affectedEntities: [proposalId],
   };
 }
 
@@ -241,6 +284,46 @@ export const JOB_REGISTRY: Record<JobType, JobRegistryEntry> = {
     capabilities: ["ai_analysis", "reporting"],
     notificationTitle: "Profit Leak Scan Complete",
   },
+  amazon_ads_sync: {
+    name: "Amazon Ads Sync",
+    handler: handleAmazonAdsSync,
+    priority: 2,
+    retryPolicy: { maxAttempts: 8, strategy: "exponential" },
+    capabilities: ["advertising"],
+    notificationTitle: "Amazon Ads Sync Complete",
+  },
+  amazon_listings_sync: {
+    name: "Amazon Listings Sync",
+    handler: handleAmazonListingsSync,
+    priority: 2,
+    retryPolicy: { maxAttempts: 8, strategy: "exponential" },
+    capabilities: ["inventory"],
+    notificationTitle: "Amazon Listings Sync Complete",
+  },
+  amazon_orders_sync: {
+    name: "Amazon Orders & Inventory Sync",
+    handler: handleAmazonOrdersSync,
+    priority: 1,
+    retryPolicy: { maxAttempts: 8, strategy: "exponential" },
+    capabilities: ["inventory", "reporting"],
+    notificationTitle: "Amazon Orders Sync Complete",
+  },
+  amazon_refunds_sync: {
+    name: "Amazon Refunds Sync",
+    handler: handleAmazonRefundsSync,
+    priority: 2,
+    retryPolicy: { maxAttempts: 8, strategy: "exponential" },
+    capabilities: ["reporting"],
+    notificationTitle: "Amazon Refunds Sync Complete",
+  },
+  apply_cost_change: {
+    name: "Apply Approved Cost Change",
+    handler: handleApplyCostChange,
+    priority: 2,
+    retryPolicy: { maxAttempts: 3, strategy: "exponential" },
+    capabilities: ["inventory"],
+    notificationTitle: "Cost Change Applied",
+  },
 };
 
 /**
@@ -250,6 +333,3 @@ export const JOB_REGISTRY: Record<JobType, JobRegistryEntry> = {
 export function getJobEntry(jobType: string): JobRegistryEntry | undefined {
   return JOB_REGISTRY[jobType as JobType];
 }
-
-/** All known job type keys */
-export const ALL_JOB_TYPES = Object.keys(JOB_REGISTRY) as JobType[];

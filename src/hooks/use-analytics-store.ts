@@ -1,8 +1,10 @@
 "use client";
 
 import { create } from "zustand";
-import { supabase } from "@/lib/supabase";
 import { useToastStore } from "@/hooks/use-toast-store";
+import { createCsv } from "@/lib/csv";
+import { sellerplusApiFetch } from "@/lib/client/api-fetch";
+import { useAuth } from "@/hooks/use-auth";
 
 export type DateRangePreset = "today" | "yesterday" | "last_7d" | "last_30d" | "this_month" | "last_month" | "lifetime";
 
@@ -104,6 +106,25 @@ export interface SystemAlert {
   createdAt: string;
 }
 
+export interface FinancialLogEntry {
+  date: string;
+  revenue: number;
+  ordersCount: number;
+  unitsSold: number;
+  cogs: number | null;
+  cogsCoverage: number;
+  shippingCost: number | null;
+  amazonFees: number | null;
+  adSpend: number | null;
+  adSales: number | null;
+  refundCosts: number | null;
+  refundCount: number | null;
+  contributionProfit: number | null;
+  calculationStatus: "incomplete";
+  sourceUpdatedAt: string | null;
+  limitations: string[];
+}
+
 interface AnalyticsStore {
   dateRange: DateRangePreset;
   searchQuery: string;
@@ -112,22 +133,10 @@ interface AnalyticsStore {
   isEditingWidgets: boolean;
   alerts: SystemAlert[];
   unreadAlertCount: number;
-  activeUserId: string | null;
+  activeScopeKey: string | null;
   loading: boolean;
   
-  financialLogs: Array<{
-    date: string;
-    revenue: number;
-    ordersCount: number;
-    unitsSold: number;
-    cogs: number;
-    shippingCost: number;
-    amazonFees: number;
-    adSpend: number;
-    adSales: number;
-    refundCosts: number;
-    refundCount: number;
-  }>;
+  financialLogs: FinancialLogEntry[];
   
   productLogs: Array<{
     sku: string;
@@ -174,10 +183,10 @@ interface AnalyticsStore {
   getDailyPerformanceLogs: () => Array<{
     date: string;
     revenue: number;
-    netProfit: number;
-    adSpend: number;
-    adSales: number;
-    refundCosts: number;
+    netProfit: number | null;
+    adSpend: number | null;
+    adSales: number | null;
+    refundCosts: number | null;
     ordersCount: number;
   }>;
 
@@ -195,11 +204,12 @@ const DEFAULT_WIDGETS: WidgetLayout[] = [
   { id: "profit_margin", title: "Profit Margin", x: 0, y: 2, w: 4, h: 1 },
 ];
 
-const checkSupabaseStatus = () => {
-  if (typeof window === "undefined") return true;
-  const isPlaceholder = !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY === "placeholder-anon-key";
-  return isPlaceholder;
-};
+async function analyticsRequest(init?: RequestInit) {
+  const response = await sellerplusApiFetch("/api/analytics/overview", init);
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error || "Analytics are unavailable.");
+  return payload;
+}
 
 export const useAnalyticsStore = create<AnalyticsStore>((set, get) => {
 
@@ -212,7 +222,7 @@ export const useAnalyticsStore = create<AnalyticsStore>((set, get) => {
     isEditingWidgets: false,
     alerts: [],
     unreadAlertCount: 0,
-    activeUserId: null,
+    activeScopeKey: null,
     loading: false,
     financialLogs: [],
     productLogs: [],
@@ -221,24 +231,18 @@ export const useAnalyticsStore = create<AnalyticsStore>((set, get) => {
     inventoryLogs: [],
 
     loadAnalyticsData: async (userId) => {
-      if (get().financialLogs.length > 0 && get().activeUserId === userId) {
+      const workspaceId = useAuth.getState().user?.workspaceId;
+      if (!workspaceId) return;
+      const scopeKey = `${userId}:${workspaceId}`;
+      if (get().financialLogs.length > 0 && get().activeScopeKey === scopeKey) {
         return;
       }
-      set({ activeUserId: userId, loading: true });
-      const offline = checkSupabaseStatus();
-
-      if (offline) {
-        if (typeof window !== "undefined") {
-          const storedW = localStorage.getItem("sp_analytics_widgets");
-          if (storedW) set({ widgets: JSON.parse(storedW) });
-        }
-        set({ loading: false });
-        return;
-      }
+      set({ activeScopeKey: scopeKey, loading: true });
 
       try {
-        // --- 1. Fetch Widget Layouts ---
-        const { data: layouts } = await supabase.from("widget_layouts").select("*").eq("user_id", userId);
+        const payload = await analyticsRequest();
+        const data = payload.data ?? {};
+        const layouts = data.layouts ?? [];
         if (layouts && layouts.length > 0) {
           const mapped = layouts.map((l: any) => ({
             id: l.widget_id,
@@ -250,42 +254,35 @@ export const useAnalyticsStore = create<AnalyticsStore>((set, get) => {
           }));
           set({ widgets: mapped });
         } else {
-          // Sync default layout to Supabase
-          const dLayouts = DEFAULT_WIDGETS.map(w => ({
-            user_id: userId,
-            widget_id: w.id,
-            col_span: w.w,
-            row_span: w.h,
-            x_pos: w.x,
-            y_pos: w.y
-          }));
-          await supabase.from("widget_layouts").upsert(dLayouts, { onConflict: "user_id,widget_id" });
           set({ widgets: DEFAULT_WIDGETS });
         }
 
-        // --- 2. Fetch Financial Logs ---
-        const { data: finData } = await supabase.from("seller_financial_metrics").select("*").eq("user_id", userId).order("date", { ascending: false });
+        const finData = data.financialLogs ?? [];
         if (finData && finData.length > 0) {
-          const mappedFin = finData.map((f: any) => ({
+          const mappedFin: FinancialLogEntry[] = finData.map((f: any) => ({
             date: f.date,
             revenue: Number(f.revenue),
-            ordersCount: f.orders_count,
-            unitsSold: f.units_sold,
-            cogs: Number(f.cogs),
-            shippingCost: Number(f.shipping_cost),
-            amazonFees: Number(f.amazon_fees),
-            adSpend: Number(f.ad_spend),
-            adSales: Number(f.ad_sales),
-            refundCosts: Number(f.refund_costs),
-            refundCount: f.refund_count
+            ordersCount: Number(f.ordersCount),
+            unitsSold: Number(f.unitsSold),
+            cogs: nullableNumber(f.cogs),
+            cogsCoverage: Number(f.cogsCoverage),
+            shippingCost: nullableNumber(f.shippingCost),
+            amazonFees: nullableNumber(f.amazonFees),
+            adSpend: nullableNumber(f.adSpend),
+            adSales: nullableNumber(f.adSales),
+            refundCosts: nullableNumber(f.refundCosts),
+            refundCount: nullableNumber(f.refundCount),
+            contributionProfit: nullableNumber(f.contributionProfit),
+            calculationStatus: f.calculationStatus,
+            sourceUpdatedAt: f.sourceUpdatedAt,
+            limitations: f.limitations,
           }));
           set({ financialLogs: mappedFin });
         } else {
           set({ financialLogs: [] });
         }
 
-        // --- 3. Fetch Alerts ---
-        const { data: alertsDb } = await supabase.from("alert_logs").select("*").eq("user_id", userId).order("created_at", { ascending: false });
+        const alertsDb = data.alerts ?? [];
         if (alertsDb && alertsDb.length > 0) {
           const mappedAlerts: SystemAlert[] = alertsDb.map((a: any) => ({
             id: a.id,
@@ -300,22 +297,7 @@ export const useAnalyticsStore = create<AnalyticsStore>((set, get) => {
           set({ alerts: [], unreadAlertCount: 0 });
         }
 
-        // --- 4. Fetch Listings for Inventory Planner & Product Analytics ---
-        const { data: listDb } = await supabase
-          .from("listings")
-          .select(`
-            *,
-            cost_profiles(
-              printing_cost,
-              material_cost,
-              packaging_cost,
-              shipping_cost,
-              labor_cost,
-              misc_cost
-            )
-          `)
-          .eq("user_id", userId)
-          .eq("status", "active");
+        const listDb = data.listings ?? [];
 
         if (listDb && listDb.length > 0) {
           const mappedInventory: InventoryItem[] = listDb.map((l: any) => {
@@ -351,23 +333,19 @@ export const useAnalyticsStore = create<AnalyticsStore>((set, get) => {
           set({ inventoryLogs: mappedInventory });
 
           const mappedProductLogs = listDb.map((l: any) => {
-            const profile = l.cost_profiles;
-            const unitCogs = profile
+            const profile = Array.isArray(l.cost_profiles) ? l.cost_profiles[0] : l.cost_profiles;
+            const unitCogs: number | null = profile
               ? (parseFloat(profile.printing_cost || 0) +
                  parseFloat(profile.material_cost || 0) +
                  parseFloat(profile.packaging_cost || 0) +
                  parseFloat(profile.shipping_cost || 0) +
                  parseFloat(profile.labor_cost || 0) +
                  parseFloat(profile.misc_cost || 0))
-              : 0;
+              : null;
 
-            const salesCount = l.units_sold_30d !== null ? Number(l.units_sold_30d) : 0;
-            const revenue = l.revenue_30d !== null ? Number(l.revenue_30d) : 0;
-            const totalCogs = unitCogs * salesCount;
-            const commission = revenue * 0.15;
-            const netProfit = revenue - totalCogs - commission;
-            const margin = revenue > 0 ? (netProfit / revenue) * 100 : 0;
-            const roi = totalCogs > 0 ? (netProfit / totalCogs) * 100 : 0;
+            const salesCount = l.units_sold_30d !== null ? Number(l.units_sold_30d) : null;
+            const revenue = l.revenue_30d !== null ? Number(l.revenue_30d) : null;
+            const totalCogs = unitCogs !== null && salesCount !== null ? unitCogs * salesCount : null;
 
             return {
               sku: l.sku,
@@ -378,20 +356,24 @@ export const useAnalyticsStore = create<AnalyticsStore>((set, get) => {
               price: Number(l.price || 0),
               revenue: revenue,
               main_image: l.main_image,
-              marketplace: l.marketplace || "Amazon.in",
+              marketplace: l.marketplace_id || null,
               cogs: totalCogs,
-              fees: commission,
-              netProfit: netProfit,
-              margin: Math.round(margin * 10) / 10,
-              roi: Math.round(roi * 10) / 10
+              fees: null,
+              netProfit: null,
+              margin: null,
+              roi: null
             };
           });
           set({ productLogs: mappedProductLogs });
         } else {
           set({ inventoryLogs: [], productLogs: [] });
         }
+        if (data.catalogTruncated) {
+          useToastStore.getState().info("Catalog view bounded", `Analytics loaded the top ${listDb.length} of ${data.catalogTotal} active listings. Use Catalog for the complete server-paginated set.`);
+        }
       } catch (e) {
-        console.error("Failed to synchronize analytics metrics with Supabase", e);
+        set({ financialLogs: [], productLogs: [], inventoryLogs: [], alerts: [], unreadAlertCount: 0 });
+        useToastStore.getState().error("Analytics unavailable", e instanceof Error ? e.message : "Try again later.");
       } finally {
         set({ loading: false });
       }
@@ -410,84 +392,41 @@ export const useAnalyticsStore = create<AnalyticsStore>((set, get) => {
     },
     
     saveWidgetLayout: async (silent = false) => {
-      const { widgets, activeUserId } = get();
-      const offline = checkSupabaseStatus();
-      
-      if (offline || !activeUserId) {
-        if (typeof window !== "undefined") {
-          localStorage.setItem("sp_analytics_widgets", JSON.stringify(widgets));
-        }
-        if (!silent) {
-          useToastStore.getState().success("Layout Saved", "Custom widget layouts saved to seller preference cache.");
-        }
-        return;
-      }
+      const { widgets, activeScopeKey } = get();
+      if (!activeScopeKey) return;
       
       try {
-        // Upsert widget coordinates to Supabase
-        for (const w of widgets) {
-          await supabase.from("widget_layouts").upsert({
-            user_id: activeUserId,
-            widget_id: w.id,
-            col_span: w.w,
-            row_span: w.h,
-            x_pos: w.x,
-            y_pos: w.y
-          }, { onConflict: "user_id,widget_id" });
-        }
+        await analyticsRequest({ method: "PATCH", body: JSON.stringify({ action: "save_widgets", widgets }) });
         if (!silent) {
-          useToastStore.getState().success("Layout Synced", "Custom widget layouts synced successfully with Supabase.");
+          useToastStore.getState().success("Layout synced", "Your SellerPlus dashboard layout is saved.");
         }
       } catch (e) {
-        console.error("Failed to sync layout parameters with Supabase", e);
+        useToastStore.getState().error("Layout not saved", e instanceof Error ? e.message : "Try again later.");
       }
     },
 
     resetWidgetLayout: async () => {
-      const { activeUserId } = get();
-      const offline = checkSupabaseStatus();
-
-      if (offline || !activeUserId) {
-        if (typeof window !== "undefined") {
-          localStorage.removeItem("sp_analytics_widgets");
-        }
-        set({ widgets: DEFAULT_WIDGETS, isEditingWidgets: false });
-        return;
-      }
+      const { activeScopeKey } = get();
+      if (!activeScopeKey) return;
 
       try {
-        await supabase.from("widget_layouts").delete().eq("user_id", activeUserId);
+        await analyticsRequest({ method: "PATCH", body: JSON.stringify({ action: "reset_widgets" }) });
         set({ widgets: DEFAULT_WIDGETS, isEditingWidgets: false });
         useToastStore.getState().info("Layout Reset", "Widget layouts reset to defaults.");
       } catch (e) {
-        console.error("Failed to reset layouts in Supabase", e);
+        useToastStore.getState().error("Layout not reset", e instanceof Error ? e.message : "Try again later.");
       }
     },
 
     markAlertsAsRead: async () => {
-      const { activeUserId } = get();
-      const offline = checkSupabaseStatus();
-
-      set((state) => {
-        const readAlerts = state.alerts.map(a => ({ ...a, isRead: true }));
-        return { alerts: readAlerts, unreadAlertCount: 0 };
-      });
-
-      if (offline || !activeUserId) {
-        if (typeof window !== "undefined") {
-          const stored = localStorage.getItem("sp_analytics_alerts");
-          if (stored) {
-            const parsed = JSON.parse(stored) as SystemAlert[];
-            localStorage.setItem("sp_analytics_alerts", JSON.stringify(parsed.map(a => ({ ...a, isRead: true }))));
-          }
-        }
-        return;
-      }
+      const { activeScopeKey } = get();
+      if (!activeScopeKey) return;
 
       try {
-        await supabase.from("alert_logs").update({ is_read: true }).eq("user_id", activeUserId);
+        await analyticsRequest({ method: "PATCH", body: JSON.stringify({ action: "mark_alerts_read" }) });
+        set((state) => ({ alerts: state.alerts.map(a => ({ ...a, isRead: true })), unreadAlertCount: 0 }));
       } catch (e) {
-        console.error("Failed to clear alerts in Supabase", e);
+        useToastStore.getState().error("Notifications not updated", e instanceof Error ? e.message : "Try again later.");
       }
     },
 
@@ -511,45 +450,8 @@ export const useAnalyticsStore = create<AnalyticsStore>((set, get) => {
           refundCount: null
         };
       }
-      const days = getPresetDays(dateRange);
-      const filteredLogs = financialLogs.slice(0, days);
-
-      let rev = 0, ord = 0, units = 0, cogsVal = 0, shipping = 0, fees = 0, spend = 0, adSalesVal = 0, refCosts = 0, refCount = 0;
-
-      filteredLogs.forEach((l) => {
-        rev += l.revenue;
-        ord += l.ordersCount;
-        units += l.unitsSold;
-        cogsVal += l.cogs;
-        shipping += l.shippingCost;
-        fees += l.amazonFees;
-        spend += l.adSpend;
-        adSalesVal += l.adSales;
-        refCosts += l.refundCosts;
-        refCount += l.refundCount;
-      });
-
-      const gross = rev - cogsVal - shipping - fees - refCosts;
-      const net = gross - spend;
-      const margin = rev > 0 ? (net / rev) * 100 : 0;
-      const roi = cogsVal > 0 ? (net / cogsVal) * 100 : 0;
-
-      return {
-        revenue: rev,
-        netProfit: net,
-        grossProfit: gross,
-        cogs: cogsVal,
-        shippingCost: shipping,
-        amazonFees: fees,
-        adSpend: spend,
-        adSales: adSalesVal,
-        refundCosts: refCosts,
-        margin: Math.round(margin * 10) / 10,
-        roi: Math.round(roi * 10) / 10,
-        ordersCount: ord,
-        unitsSold: units,
-        refundCount: refCount
-      };
+      const filteredLogs = filterFinancialLogs(financialLogs, getRangeWindows(dateRange).current);
+      return summarizeFinancialLogs(filteredLogs);
     },
 
     getPrevSummary: () => {
@@ -572,48 +474,10 @@ export const useAnalyticsStore = create<AnalyticsStore>((set, get) => {
           refundCount: null
         };
       }
-      const days = getPresetDays(dateRange);
-      const start = days;
-      const end = days * 2;
-
-      const prevLogs = financialLogs.slice(start, end);
-
-      let rev = 0, ord = 0, units = 0, cogsVal = 0, shipping = 0, fees = 0, spend = 0, adSalesVal = 0, refCosts = 0, refCount = 0;
-
-      prevLogs.forEach((l) => {
-        rev += l.revenue;
-        ord += l.ordersCount;
-        units += l.unitsSold;
-        cogsVal += l.cogs;
-        shipping += l.shippingCost;
-        fees += l.amazonFees;
-        spend += l.adSpend;
-        adSalesVal += l.adSales;
-        refCosts += l.refundCosts;
-        refCount += l.refundCount;
-      });
-
-      const gross = rev - cogsVal - shipping - fees - refCosts;
-      const net = gross - spend;
-      const margin = rev > 0 ? (net / rev) * 100 : 0;
-      const roi = cogsVal > 0 ? (net / cogsVal) * 100 : 0;
-
-      return {
-        revenue: rev,
-        netProfit: net,
-        grossProfit: gross,
-        cogs: cogsVal,
-        shippingCost: shipping,
-        amazonFees: fees,
-        adSpend: spend,
-        adSales: adSalesVal,
-        refundCosts: refCosts,
-        margin: Math.round(margin * 10) / 10,
-        roi: Math.round(roi * 10) / 10,
-        ordersCount: ord,
-        unitsSold: units,
-        refundCount: refCount
-      };
+      const previousWindow = getRangeWindows(dateRange).previous;
+      if (!previousWindow) return emptyFinancialSummary();
+      const prevLogs = filterFinancialLogs(financialLogs, previousWindow);
+      return summarizeFinancialLogs(prevLogs);
     },
 
     getProductAnalytics: () => {
@@ -631,7 +495,7 @@ export const useAnalyticsStore = create<AnalyticsStore>((set, get) => {
           netProfit: p.netProfit ?? null,
           margin: p.margin ?? null,
           roi: p.roi ?? null,
-          refundRate: 0,
+          refundRate: null,
           main_image: p.main_image ?? null,
           marketplace: p.marketplace ?? "Amazon.in"
         };
@@ -659,16 +523,16 @@ export const useAnalyticsStore = create<AnalyticsStore>((set, get) => {
         };
       }
 
-      const acos = sales > 0 ? (spend / sales) * 100 : 0;
-      const tacos = (sum.revenue !== null && sum.revenue > 0) ? (spend / sum.revenue) * 100 : 0;
-      const roas = spend > 0 ? sales / spend : 0;
+      const acos = sales > 0 ? (spend / sales) * 100 : null;
+      const tacos = (sum.revenue !== null && sum.revenue > 0) ? (spend / sum.revenue) * 100 : null;
+      const roas = spend > 0 ? sales / spend : null;
 
       return {
         adSpend: spend,
         adSales: sales,
-        acos: Math.round(acos * 10) / 10,
-        tacos: Math.round(tacos * 10) / 10,
-        roas: Math.round(roas * 100) / 100,
+        acos: acos === null ? null : Math.round(acos * 10) / 10,
+        tacos: tacos === null ? null : Math.round(tacos * 10) / 10,
+        roas: roas === null ? null : Math.round(roas * 100) / 100,
         cpc: null,
         ctr: null,
         impressions: null,
@@ -685,15 +549,16 @@ export const useAnalyticsStore = create<AnalyticsStore>((set, get) => {
       const { productLogs, getSummary } = get();
       const sum = getSummary();
       const refundVal = sum.refundCosts;
-      const count = sum.refundCount || null;
+      const count = sum.refundCount;
       const refundRate = (sum.unitsSold !== null && sum.unitsSold > 0 && count !== null) ? (count / sum.unitsSold) * 100 : null;
 
-      const topRefunded = productLogs.map((p) => {
-        const rate = (p.salesCount && p.refundCount) ? (p.refundCount / p.salesCount) * 100 : 0;
+      const topRefunded = productLogs.filter((p) => p.refundCount !== null).map((p) => {
+        const count = p.refundCount as number;
+        const rate = (p.salesCount !== null && p.salesCount > 0) ? (count / p.salesCount) * 100 : 0;
         return {
           sku: p.sku,
           name: p.name,
-          count: p.refundCount || 0,
+          count,
           rate: Math.round(rate * 10) / 10
         };
       }).sort((a, b) => b.count - a.count).filter(p => p.count > 0);
@@ -708,28 +573,23 @@ export const useAnalyticsStore = create<AnalyticsStore>((set, get) => {
 
     getDailyPerformanceLogs: () => {
       const { financialLogs, dateRange } = get();
-      const days = getPresetDays(dateRange);
-      return financialLogs.slice(0, days).map(l => ({
-        date: l.date,
-        revenue: l.revenue,
-        netProfit: l.revenue - l.cogs - l.shippingCost - l.amazonFees - l.adSpend - l.refundCosts,
-        adSpend: l.adSpend,
-        adSales: l.adSales,
-        refundCosts: l.refundCosts,
-        ordersCount: l.ordersCount
-      })).reverse();
+      const filteredLogs = filterFinancialLogs(financialLogs, getRangeWindows(dateRange).current);
+      return filteredLogs.map((log) => {
+        const summary = summarizeFinancialLogs([log]);
+        return {
+          date: log.date,
+          revenue: log.revenue,
+          netProfit: summary.netProfit,
+          adSpend: log.adSpend,
+          adSales: log.adSales,
+          refundCosts: log.refundCosts,
+          ordersCount: log.ordersCount,
+        };
+      }).reverse();
     },
 
     exportToCSV: (headers, rows, filename) => {
-      let csvContent = "data:text/csv;charset=utf-8," 
-        + [headers.join(",")].concat(rows.map(e => e.map(val => {
-          if (typeof val === 'string' && val.includes(',')) {
-            return `"${val.replace(/"/g, '""')}"`;
-          }
-          return val;
-        }).join(","))).join("\n");
-      
-      const encodedUri = encodeURI(csvContent);
+      const encodedUri = "data:text/csv;charset=utf-8," + encodeURIComponent(createCsv(headers, rows));
       const link = document.createElement("a");
       link.setAttribute("href", encodedUri);
       link.setAttribute("download", `${filename}.csv`);
@@ -740,14 +600,99 @@ export const useAnalyticsStore = create<AnalyticsStore>((set, get) => {
   };
 });
 
-function getPresetDays(preset: DateRangePreset): number {
-  switch (preset) {
-    case "today": return 1;
-    case "yesterday": return 2;
-    case "last_7d": return 7;
-    case "last_30d": return 30;
-    case "this_month": return 28;
-    case "last_month": return 30;
-    default: return 90;
+function emptyFinancialSummary(): FinancialSummary {
+  return {
+    revenue: null, netProfit: null, grossProfit: null, cogs: null,
+    shippingCost: null, amazonFees: null, adSpend: null, adSales: null,
+    refundCosts: null, margin: null, roi: null, ordersCount: null,
+    unitsSold: null, refundCount: null,
+  };
+}
+
+function nullableNumber(value: unknown): number | null {
+  return value === null || value === undefined ? null : Number(value);
+}
+
+function sumNullable(values: Array<number | null>): number | null {
+  if (values.some((value) => value === null)) return null;
+  return values.reduce<number>((total, value) => total + (value as number), 0);
+}
+
+export function summarizeFinancialLogs(logs: FinancialLogEntry[]): FinancialSummary {
+  if (logs.length === 0) return emptyFinancialSummary();
+
+  const revenue = logs.reduce((total, log) => total + log.revenue, 0);
+  const ordersCount = logs.reduce((total, log) => total + log.ordersCount, 0);
+  const unitsSold = logs.reduce((total, log) => total + log.unitsSold, 0);
+  const cogs = sumNullable(logs.map((log) => log.cogs));
+  const shippingCost = sumNullable(logs.map((log) => log.shippingCost));
+  const amazonFees = sumNullable(logs.map((log) => log.amazonFees));
+  const adSpend = sumNullable(logs.map((log) => log.adSpend));
+  const adSales = sumNullable(logs.map((log) => log.adSales));
+  const refundCosts = sumNullable(logs.map((log) => log.refundCosts));
+  const refundCount = sumNullable(logs.map((log) => log.refundCount));
+  const grossProfit = cogs !== null && shippingCost !== null && amazonFees !== null && refundCosts !== null
+    ? revenue - cogs - shippingCost - amazonFees - refundCosts
+    : null;
+  const netProfit = grossProfit !== null && adSpend !== null ? grossProfit - adSpend : null;
+  const margin = netProfit !== null && revenue > 0 ? Math.round((netProfit / revenue) * 1000) / 10 : null;
+  const roi = netProfit !== null && cogs !== null && cogs > 0 ? Math.round((netProfit / cogs) * 1000) / 10 : null;
+
+  return {
+    revenue,
+    netProfit,
+    grossProfit,
+    cogs,
+    shippingCost,
+    amazonFees,
+    adSpend,
+    adSales,
+    refundCosts,
+    margin,
+    roi,
+    ordersCount,
+    unitsSold,
+    refundCount,
+  };
+}
+
+interface DateWindow { since: number; until: number }
+
+function startOfUtcDay(value: Date): Date {
+  return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()));
+}
+
+function getRangeWindows(preset: DateRangePreset, now = new Date()): { current: DateWindow; previous: DateWindow | null } {
+  const today = startOfUtcDay(now);
+  const tomorrow = new Date(today.getTime() + 86_400_000);
+  const dayWindow = (days: number) => {
+    const since = tomorrow.getTime() - days * 86_400_000;
+    return { current: { since, until: tomorrow.getTime() }, previous: { since: since - days * 86_400_000, until: since } };
+  };
+  if (preset === "today") return dayWindow(1);
+  if (preset === "yesterday") {
+    return {
+      current: { since: today.getTime() - 86_400_000, until: today.getTime() },
+      previous: { since: today.getTime() - 2 * 86_400_000, until: today.getTime() - 86_400_000 },
+    };
   }
+  if (preset === "last_7d") return dayWindow(7);
+  if (preset === "last_30d") return dayWindow(30);
+  const thisMonth = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1);
+  const previousMonth = Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - 1, 1);
+  const monthBeforePrevious = Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - 2, 1);
+  if (preset === "this_month") {
+    return { current: { since: thisMonth, until: tomorrow.getTime() }, previous: { since: previousMonth, until: thisMonth } };
+  }
+  if (preset === "last_month") {
+    return { current: { since: previousMonth, until: thisMonth }, previous: { since: monthBeforePrevious, until: previousMonth } };
+  }
+  return { current: { since: Number.NEGATIVE_INFINITY, until: Number.POSITIVE_INFINITY }, previous: null };
+}
+
+function filterFinancialLogs(logs: FinancialLogEntry[], window: DateWindow): FinancialLogEntry[] {
+  return logs.filter((log) => {
+    const timestamp = Date.parse(`${log.date}T00:00:00Z`);
+    return Number.isFinite(timestamp) && timestamp >= window.since && timestamp < window.until;
+  });
 }

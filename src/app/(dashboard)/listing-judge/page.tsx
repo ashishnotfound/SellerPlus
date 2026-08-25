@@ -9,7 +9,7 @@ import {
   CompetitorComparison,
   ListingJudgeReport,
   ProductGenerationResult,
-} from "@/lib/ai";
+} from "@/lib/ai/client";
 import {
   AlertTriangle,
   CheckCircle,
@@ -29,10 +29,8 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSubscription } from "@/hooks/use-subscription";
-import { useAuth } from "@/hooks/use-auth";
 
 export default function ListingJudgePage() {
-  const user = useAuth((s) => s.user);
   const [activeTab, setActiveTab] = useState<"audit" | "generate" | "competitor">("audit");
 
   // Tab 1: URL Audit states
@@ -90,7 +88,7 @@ export default function ListingJudgePage() {
     setAuditError("");
     setAuditReport(null);
 
-    const res = await auditAmazonUrl(auditUrl, auditHtml, user?.id);
+    const res = await auditAmazonUrl(auditUrl, auditHtml);
     if (res.success && res.report) {
       setAuditReport(res.report);
       incrementUsage("auditsUsed");
@@ -135,12 +133,12 @@ export default function ListingJudgePage() {
   };
 
   // --- UI Score Ring Helper ---
-  const ScoreRing = ({ score, label, max = 100 }: { score: number; label: string; max?: number }) => {
+  const ScoreRing = ({ score, label, max = 100 }: { score: number | null; label: string; max?: number }) => {
     const radius = 28;
     const stroke = 5;
     const normalizedRadius = radius - stroke * 2;
     const circumference = normalizedRadius * 2 * Math.PI;
-    const strokeDashoffset = circumference - (score / max) * circumference;
+    const strokeDashoffset = score === null ? circumference : circumference - (score / max) * circumference;
 
     const getColor = (s: number) => {
       const percentage = (s / max) * 100;
@@ -154,7 +152,7 @@ export default function ListingJudgePage() {
         <div className="relative flex items-center justify-center w-16 h-16">
           <svg className="transform -rotate-90 w-16 h-16">
             <circle className="stroke-white/[0.04]" fill="transparent" strokeWidth={stroke} r={normalizedRadius} cx={32} cy={32} />
-            <circle
+            {score !== null && <circle
               className={`transition-all duration-500 ease-out ${getColor(score)}`}
               fill="transparent"
               strokeWidth={stroke}
@@ -163,9 +161,9 @@ export default function ListingJudgePage() {
               r={normalizedRadius}
               cx={32}
               cy={32}
-            />
+            />}
           </svg>
-          <span className="absolute text-[11px] font-bold text-white">{Math.round(score)}</span>
+          <span className="absolute text-[11px] font-bold text-white">{score === null ? "N/A" : Math.round(score)}</span>
         </div>
         <span className="text-[9px] font-semibold tracking-wider text-zinc-400 uppercase text-center">{label}</span>
       </div>
@@ -319,8 +317,8 @@ export default function ListingJudgePage() {
                 {/* Visual scorecard */}
                 <GlassCard className="flex flex-col items-center text-center gap-6">
                   <div>
-                    <h3 className="text-base font-bold text-white">Listing Evaluation Grade</h3>
-                    <p className="text-[10px] text-zinc-500 font-semibold tracking-wider uppercase mt-0.5">Overall Score</p>
+                    <h3 className="text-base font-bold text-white">Listing Content Structure</h3>
+                    <p className="text-[10px] text-zinc-500 font-semibold tracking-wider uppercase mt-0.5">Deterministic completeness score</p>
                   </div>
                   
                   <div className="relative flex items-center justify-center w-24 h-24">
@@ -341,11 +339,14 @@ export default function ListingJudgePage() {
                   </div>
 
                   <div className="grid grid-cols-5 gap-1 w-full pt-4 border-t border-white/5">
-                    <ScoreRing score={auditReport.scores.seo} label="SEO" />
-                    <ScoreRing score={auditReport.scores.conversion} label="Conv" />
+                    <ScoreRing score={auditReport.scores.seo} label="Title" />
+                    <ScoreRing score={auditReport.scores.conversion} label="Content" />
                     <ScoreRing score={auditReport.scores.keywords} label="Keywords" />
-                    <ScoreRing score={auditReport.scores.image} label="Image" />
-                    <ScoreRing score={auditReport.scores.competitiveness} label="Comp" />
+                    <ScoreRing score={auditReport.scores.image} label="Images" />
+                    <ScoreRing score={auditReport.scores.competitiveness} label="Competitors" />
+                  </div>
+                  <div className="w-full rounded-lg border border-amber-500/20 bg-amber-500/[0.03] px-3 py-2 text-left text-[10px] leading-relaxed text-zinc-500">
+                    {auditReport.limitations.join(" ")}
                   </div>
                 </GlassCard>
 
@@ -382,7 +383,7 @@ export default function ListingJudgePage() {
                     <h3 className="text-sm font-bold text-white">Title Analysis</h3>
                     {auditReport.titleAnalysis.keywordsFound?.length > 0 && (
                       <div className="flex flex-col gap-1.5">
-                        <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider">Keywords Found</span>
+                        <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider">AI-observed title phrases</span>
                         <div className="flex flex-wrap gap-1.5">
                           {auditReport.titleAnalysis.keywordsFound.map((kw, i) => (
                             <span key={i} className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 font-mono text-[10px]">{kw}</span>
@@ -392,7 +393,7 @@ export default function ListingJudgePage() {
                     )}
                     {auditReport.titleAnalysis.keywordsMissing?.length > 0 && (
                       <div className="flex flex-col gap-1.5">
-                        <span className="text-[10px] font-bold text-rose-400 uppercase tracking-wider">Keywords Missing</span>
+                        <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider">AI-suggested terms — validate before use</span>
                         <div className="flex flex-wrap gap-1.5">
                           {auditReport.titleAnalysis.keywordsMissing.map((kw, i) => (
                             <span key={i} className="px-2 py-0.5 rounded bg-rose-500/10 text-rose-300 border border-rose-500/20 font-mono text-[10px]">{kw}</span>
@@ -449,10 +450,7 @@ export default function ListingJudgePage() {
                 {auditReport.imageAnalysis && (
                   <GlassCard className="flex flex-col gap-4">
                     <h3 className="text-sm font-bold text-white">Image Analysis</h3>
-                    <div className="flex justify-between text-xs text-zinc-400 border-b border-white/5 pb-2">
-                      <span>Estimated images</span>
-                      <span className="font-mono text-zinc-200">{auditReport.imageAnalysis.estimatedCount} / {auditReport.imageAnalysis.recommendedCount} recommended</span>
-                    </div>
+                    <div className="text-xs text-zinc-500">{auditReport.imageAnalysis.unavailableReason}</div>
                     {auditReport.imageAnalysis.missingTypes?.length > 0 && (
                       <div className="flex flex-col gap-1.5">
                         <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider">Missing Image Types</span>
@@ -687,7 +685,7 @@ export default function ListingJudgePage() {
                     </div>
                     <div className="flex items-center gap-4">
                       <div className="flex items-center gap-1 bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 px-2 py-1 rounded-lg text-xs font-bold font-mono">
-                        SEO Score: {genResult.seoScore}%
+                        Draft completeness: {genResult.seoScore}%
                       </div>
                       <button
                         onClick={() => copyToClipboard(genResult.title, "title")}
@@ -914,7 +912,7 @@ export default function ListingJudgePage() {
                       <tr className="border-b border-white/5 text-zinc-500 font-semibold h-9">
                         <th>Product Details</th>
                         <th>Price</th>
-                        <th>SEO Score</th>
+                        <th>Measured SEO</th>
                         <th>Bullet Quality</th>
                         <th>Image Evaluation</th>
                         <th>Keywords Density</th>
@@ -933,13 +931,8 @@ export default function ListingJudgePage() {
                           <td className="font-mono text-zinc-300">{comp.price}</td>
                           <td>
                             <div className="flex items-center gap-1.5">
-                              <span className={cn(
-                                "font-bold font-mono px-2 py-0.5 rounded text-[10px]",
-                                comp.seoStrength > 75 ? "bg-emerald-500/10 text-emerald-400" :
-                                comp.seoStrength > 50 ? "bg-amber-500/10 text-amber-400" :
-                                "bg-rose-500/10 text-rose-400"
-                              )}>
-                                {comp.seoStrength}%
+                              <span className="rounded bg-zinc-500/10 px-2 py-0.5 font-mono text-[10px] font-bold text-zinc-400" title="No verified SEO-performance data source is connected.">
+                                N/A
                               </span>
                             </div>
                           </td>
@@ -974,6 +967,12 @@ export default function ListingJudgePage() {
                   <p className="text-xs text-zinc-400 leading-relaxed whitespace-pre-line">{compReport.opportunitySummary}</p>
                 </GlassCard>
               </div>
+              <GlassCard className="border-amber-500/20 bg-amber-500/[0.03]">
+                <p className="text-xs font-semibold text-amber-300">Source and limitations</p>
+                <ul className="mt-2 list-disc space-y-1 pl-4 text-[11px] text-zinc-500">
+                  {compReport.limitations.map((limitation) => <li key={limitation}>{limitation}</li>)}
+                </ul>
+              </GlassCard>
             </div>
           )}
         </div>

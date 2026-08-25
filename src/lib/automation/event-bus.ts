@@ -1,12 +1,6 @@
-import { createClient } from "@supabase/supabase-js";
 import { v4 as uuidv4 } from "uuid";
 import { EventCatalogKeys, InferEvent, validateEvent } from "./event-catalog";
-
-// We use the service role key since the event bus runs server-side
-// and writes to tables that normal users can't write arbitrary records to (like jobs).
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
-const supabase = createClient(supabaseUrl, supabaseServiceKey);
+import { getAdminClient } from "@/lib/supabase/admin";
 
 /**
  * EventSubscriptionRegistry
@@ -27,6 +21,7 @@ export interface EmitOptions {
   causation_id?: string;
   correlation_id?: string;
   user_id?: string;
+  workspace_id: string;
 }
 
 /**
@@ -35,9 +30,10 @@ export interface EmitOptions {
 export async function emitEvent<K extends EventCatalogKeys>(
   key: K,
   payload: InferEvent<K>["payload"],
-  options: EmitOptions = {}
+  options: EmitOptions,
 ): Promise<{ success: boolean; eventId?: string; error?: any }> {
   try {
+    const supabase = getAdminClient();
     const eventType = key.split(".v")[0];
     const version = "v" + key.split(".v")[1];
 
@@ -47,6 +43,7 @@ export async function emitEvent<K extends EventCatalogKeys>(
     const rawEvent = {
       id: eventId,
       user_id: options.user_id,
+      workspace_id: options.workspace_id,
       event_type: eventType,
       version: version,
       payload: payload,
@@ -74,6 +71,8 @@ export async function emitEvent<K extends EventCatalogKeys>(
         job_type: queueName,
         idempotency_key: `${queueName}-${eventId}`,
         payload: rawEvent,
+        user_id: options.user_id,
+        workspace_id: options.workspace_id,
         status: "pending",
         correlation_id: correlationId,
       }));

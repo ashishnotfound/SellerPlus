@@ -1,32 +1,14 @@
-import { createClient } from "@supabase/supabase-js";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { createClient } from "@/lib/supabase/client";
 
-const getSupabaseUrl = () => {
-  if (typeof window !== "undefined" && (window as any).__SUPABASE_CONFIG__?.url) {
-    return (window as any).__SUPABASE_CONFIG__.url;
-  }
-  return process.env.NEXT_PUBLIC_SUPABASE_URL || "https://placeholder-url.supabase.co";
-};
-
-const getSupabaseAnonKey = () => {
-  if (typeof window !== "undefined" && (window as any).__SUPABASE_CONFIG__?.anonKey) {
-    return (window as any).__SUPABASE_CONFIG__.anonKey;
-  }
-  return process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "placeholder-anon-key";
-};
-
-let _supabaseClient: any = null;
-
-export const getSupabase = () => {
-  if (!_supabaseClient) {
-    _supabaseClient = createClient(getSupabaseUrl(), getSupabaseAnonKey());
-  }
-  return _supabaseClient;
-};
+export const getSupabase = (): SupabaseClient => createClient();
 
 // For backwards compatibility, proxy the supabase export if it's imported statically
-export const supabase = new Proxy({} as any, {
-  get: (target, prop) => {
-    return getSupabase()[prop as keyof typeof _supabaseClient];
+export const supabase = new Proxy({} as SupabaseClient, {
+  get: (_target, prop) => {
+    const client = getSupabase() as unknown as Record<PropertyKey, unknown>;
+    const value = client[prop];
+    return typeof value === "function" ? value.bind(client) : value;
   }
 });
 

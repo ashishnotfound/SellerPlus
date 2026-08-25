@@ -1,152 +1,166 @@
-import { Worker } from "./base-worker";
-import { ApprovalEngine } from "../approval-engine";
-import { emitEvent } from "../event-bus";
-// In a real scenario, each worker class would be in its own file
+import { z } from "zod";
+import type { Worker } from "./base-worker";
+import { getAdminClient } from "@/lib/supabase/admin";
+import { jobService } from "@/lib/jobs/job-service";
+
+const optimizationRequestSchema = z.object({
+  target: z.enum(["ads", "inventory", "pricing"]),
+  context: z.record(z.unknown()).default({}),
+});
+
+const recommendationSchema = z.object({
+  recommendation_id: z.string().uuid(),
+  action_type: z.string().min(1),
+});
+
+function requireTenant(event: Parameters<Worker["processJob"]>[0]) {
+  if (!event.user_id || !event.workspace_id) {
+    throw new Error("The event is missing its tenant or user owner.");
+  }
+  return { userId: event.user_id, workspaceId: event.workspace_id };
+}
 
 export const AIWorker: Worker = {
   name: "ai_worker",
-  processJob: async (payload) => {
-    console.log(`[ai_worker] Processing job for event ${payload.event_type} (Correlation ID: ${payload.correlation_id})`);
-    
-    if (payload.event_type === "ai.optimization.requested") {
-      const data = payload.payload;
-      
-      // Simulated AI generation of an action
-      // In reality, this would call LLM to figure out WHAT to optimize based on the data.target
-      const generatedAction = {
-        action_type: `optimize_${data.target}`,
-        proposed_changes: { budget_increase: 500, target: data.target },
-        confidence: 85,
-        risk_level: "medium"
-      };
-
-      if (!payload.user_id) throw new Error("Missing user_id for optimization request");
-
-      // Pass it to Approval Engine
-      const evaluation = await ApprovalEngine.evaluateAction(
-        payload.user_id,
-        generatedAction.action_type,
-        generatedAction,
-        payload.correlation_id
-      );
-
-      console.log(`[ai_worker] Action evaluated as: ${evaluation.status}`);
-
-      if (evaluation.status === "approved") {
-        // If automatically approved, we can push it straight to execution
-        // We'd emit an event here for ActionWorker
-        await emitEvent("ai.recommendation_generated.v1", {
-          recommendation_id: evaluation.workflowId || "auto-approved",
-          confidence: generatedAction.confidence,
-          risk_level: generatedAction.risk_level,
-          action_type: generatedAction.action_type
-        }, { 
-          correlation_id: payload.correlation_id,
-          user_id: payload.user_id 
-        });
-      }
+  processJob: async (event) => {
+    if (event.event_type !== "ai.optimization.requested") {
+      throw new Error(`AI worker does not support event type ${event.event_type}.`);
     }
-  }
+
+    const owner = requireTenant(event);
+    const request = optimizationRequestSchema.parse(event.payload);
+    const jobType = request.target === "ads" ? "audit_ads" : "bi_analysis";
+    const goal = request.target === "inventory"
+      ? "PREVENT_STOCKOUT"
+      : request.target === "pricing"
+        ? "MAXIMIZE_PROFIT"
+        : "REDUCE_ACOS";
+
+    await jobService.enqueue({
+      type: jobType,
+      userId: owner.userId,
+      workspaceId: owner.workspaceId,
+      payload: {
+        mode: request.target === "ads" ? "Advertising Audit" : "Store Audit",
+        goal,
+        sourceEventId: event.id,
+        requestContext: request.context,
+      },
+      priority: 3,
+      maxAttempts: 3,
+      idempotencyKey: `ai-optimization:${event.id}`,
+    });
+  },
 };
 
 export const AutomationWorker: Worker = {
   name: "automation_worker",
-  processJob: async (payload) => {
-    console.log(`[automation_worker] Processing job for event ${payload.event_type} (Correlation ID: ${payload.correlation_id})`);
-    
-    if (payload.event_type === "ai.recommendation_generated") {
-      const data = payload.payload;
-      
-      console.log(`[automation_worker] Executing autonomous action: ${data.action_type}`);
-      // Simulating execution...
-      await new Promise((res) => setTimeout(res, 500));
-      
-      console.log(`[automation_worker] Action ${data.action_type} executed successfully!`);
-      // In a real system, we'd emit action.executed.v1 so the audit log/UI can update
+  processJob: async (event) => {
+    if (event.event_type !== "ai.recommendation_generated") {
+      throw new Error(`Automation worker does not support event type ${event.event_type}.`);
     }
-  }
+
+    const owner = requireTenant(event);
+    const recommendation = recommendationSchema.parse(event.payload);
+    const admin = getAdminClient();
+    const { data: proposal, error } = await admin
+      .from("action_proposals")
+      .select("id, status, action_type")
+      .eq("id", recommendation.recommendation_id)
+      .eq("workspace_id", owner.workspaceId)
+      .maybeSingle();
+
+    if (error) throw error;
+    if (!proposal) throw new Error("The referenced action proposal does not exist in this workspace.");
+    if (proposal.status !== "approved") return;
+
+    // External mutations must have a deterministic executor registered for the
+    // action type. Until that executor exists, fail closed instead of reporting
+    // a successful marketplace or advertising change.
+    throw new Error(`No deterministic executor is registered for ${proposal.action_type}.`);
+  },
 };
 
 export const NotificationWorker: Worker = {
   name: "notification_worker",
-  processJob: async (payload) => {
-    console.log(`[notification_worker] Processing job for event ${payload.event_type} (Correlation ID: ${payload.correlation_id})`);
-    
-    if (payload.event_type === "report.generated") {
-      console.log(`[notification_worker] Sending report to user via App Notification/Email`);
-      console.log("=== DAILY HEALTH REPORT ===");
-      console.log(payload.payload.content);
-      console.log("===========================");
+  processJob: async (event) => {
+    const owner = requireTenant(event);
+    const admin = getAdminClient();
+    let title: string;
+    let content: string;
+
+    if (event.event_type === "ai.recommendation_generated") {
+      const recommendation = recommendationSchema.parse(event.payload);
+      title = "AI action ready for review";
+      content = `Review the proposed ${recommendation.action_type} action before execution.`;
+    } else if (event.event_type === "report.generated") {
+      const report = z.object({ summary: z.string().min(1) }).parse(event.payload);
+      title = "SellerPlus report ready";
+      content = report.summary;
+    } else {
+      throw new Error(`Notification worker does not support event type ${event.event_type}.`);
     }
-  }
+
+    const { error } = await admin.from("notifications").insert({
+      workspace_id: owner.workspaceId,
+      user_id: owner.userId,
+      channel: "in-app",
+      title,
+      content,
+    });
+    if (error) throw error;
+  },
 };
 
 export const ReportWorker: Worker = {
   name: "report_worker",
-  processJob: async (payload) => {
-    console.log(`[report_worker] Processing job for event ${payload.event_type} (Correlation ID: ${payload.correlation_id})`);
-    
-    if (payload.event_type === "sync.completed") {
-      // Step 2 Phase 2: Sync is done, now generate the daily report using AI
-      console.log(`[report_worker] Sync complete, analyzing data and generating Daily Health Report...`);
-      
-      // Simulating AI generation...
-      const report = {
-        Revenue: "₹45,000",
-        ROAS: "3.2x",
-        TopSeller: "SKU-992",
-        Problem: "ACOS trending high on Campaign B",
-        Recommendation: "Pause Campaign B keywords with ACOS > 45%"
-      };
-
-      await emitEvent("report.generated.v1", {
-        report_type: "daily_health",
-        content: report,
-        summary: "Your daily seller health report is ready."
-      }, {
-        correlation_id: payload.correlation_id,
-        user_id: payload.user_id
-      });
+  processJob: async (event) => {
+    if (event.event_type !== "sync.completed") {
+      throw new Error(`Report worker does not support event type ${event.event_type}.`);
     }
-  }
+    const owner = requireTenant(event);
+
+    await jobService.enqueue({
+      type: "generate_report",
+      userId: owner.userId,
+      workspaceId: owner.workspaceId,
+      payload: { sourceEventId: event.id, sync: event.payload },
+      priority: 5,
+      maxAttempts: 2,
+      idempotencyKey: `report-for-sync:${event.id}`,
+    });
+  },
 };
 
 export const SyncWorker: Worker = {
   name: "sync_worker",
-  processJob: async (payload) => {
-    console.log(`[sync_worker] Processing job for event ${payload.event_type} (Correlation ID: ${payload.correlation_id})`);
-    
-    if (payload.event_type === "schedule.daily.triggered") {
-      // Step 2 Phase 1: Scheduled trigger fires the sync
-      console.log(`[sync_worker] Performing Amazon SP-API Sync...`);
-      // Simulating API call
-      await new Promise((res) => setTimeout(res, 1000));
-      
-      console.log(`[sync_worker] Sync complete, emitting sync.completed.v1`);
-      await emitEvent("sync.completed.v1", {
-        source: "amazon_sp_api",
-        records_updated: 45
-      }, {
-        correlation_id: payload.correlation_id,
-        user_id: payload.user_id
-      });
+  processJob: async (event) => {
+    requireTenant(event);
+    if (event.event_type !== "schedule.daily.triggered") {
+      throw new Error(`Sync worker does not support event type ${event.event_type}.`);
     }
-  }
+    throw new Error(
+      "Scheduled Amazon sync requires a credential-backed marketplace account and a registered incremental sync handler.",
+    );
+  },
 };
 
 export const WarehouseWorker: Worker = {
   name: "warehouse_worker",
-  processJob: async (payload) => {
-    console.log(`[warehouse_worker] Processing job for event ${payload.event_type} (Correlation ID: ${payload.correlation_id})`);
-    // Example: Assign worker tasks or update inventory ledger
-  }
+  processJob: async (event) => {
+    requireTenant(event);
+    if (event.event_type !== "order.created") {
+      throw new Error(`Warehouse worker does not support event type ${event.event_type}.`);
+    }
+    throw new Error("No warehouse allocation policy is configured for this workspace.");
+  },
 };
 
 export const WorkerRegistry: Record<string, Worker> = {
-  "ai_worker": AIWorker,
-  "automation_worker": AutomationWorker,
-  "notification_worker": NotificationWorker,
-  "report_worker": ReportWorker,
-  "sync_worker": SyncWorker,
-  "warehouse_worker": WarehouseWorker,
+  ai_worker: AIWorker,
+  automation_worker: AutomationWorker,
+  notification_worker: NotificationWorker,
+  report_worker: ReportWorker,
+  sync_worker: SyncWorker,
+  warehouse_worker: WarehouseWorker,
 };

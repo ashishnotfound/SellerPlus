@@ -5,12 +5,13 @@ import { useAuth } from "@/hooks/use-auth";
 import { useToastStore } from "@/hooks/use-toast-store";
 import {
   CalendarClock, Plus, Trash2, Play, Pause, RefreshCw,
-  CheckCircle2, Clock, AlertCircle, Zap, X, ChevronDown,
+  AlertCircle, Zap, X, ChevronDown,
   BarChart2, Package, FileText, Search, TrendingDown,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { PRESET_SCHEDULES, PresetScheduleKey } from "@/lib/jobs/cron-utils";
-import { JOB_REGISTRY, ALL_JOB_TYPES, type JobType } from "@/lib/jobs/job-registry";
+import { JOB_CATALOG, SCHEDULABLE_JOB_TYPES, type JobType } from "@/lib/jobs/job-catalog";
+import { sellerplusApiFetch } from "@/lib/client/api-fetch";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -22,6 +23,7 @@ interface AiSchedule {
   status: "active" | "paused";
   last_run: string | null;
   next_run: string;
+  last_error?: string | null;
   created_at: string;
 }
 
@@ -58,7 +60,7 @@ interface ScheduleCardProps {
 
 function ScheduleCard({ schedule, onToggle, onDelete, toggling, deleting }: ScheduleCardProps) {
   const isActive = schedule.status === "active";
-  const registryEntry = JOB_REGISTRY[schedule.task_type];
+  const registryEntry = JOB_CATALOG[schedule.task_type];
   const nextRun = schedule.next_run ? new Date(schedule.next_run) : null;
   const lastRun = schedule.last_run ? new Date(schedule.last_run) : null;
 
@@ -119,6 +121,12 @@ function ScheduleCard({ schedule, onToggle, onDelete, toggling, deleting }: Sche
             <p className="text-white/55">{lastRun.toLocaleString()}</p>
           </div>
         )}
+        {schedule.last_error && (
+          <div className="rounded-lg border border-rose-500/20 bg-rose-500/5 px-3 py-2 col-span-2">
+            <p className="text-rose-300/70 mb-0.5">Paused reason</p>
+            <p className="text-rose-200/80 break-words">{schedule.last_error}</p>
+          </div>
+        )}
       </div>
 
       {/* Actions */}
@@ -158,7 +166,7 @@ interface CreateModalProps {
   onCreate: (data: {
     title: string;
     task_type: JobType;
-    cron_schedule: string;
+    schedule_key: PresetScheduleKey;
   }) => Promise<void>;
   creating: boolean;
 }
@@ -166,17 +174,16 @@ interface CreateModalProps {
 function CreateScheduleModal({ onClose, onCreate, creating }: CreateModalProps) {
   const [taskType, setTaskType] = useState<JobType>("executive_assistant");
   const [scheduleKey, setScheduleKey] = useState<PresetScheduleKey>("every_morning");
-  const [title, setTitle] = useState(JOB_REGISTRY.executive_assistant.name);
+  const [title, setTitle] = useState(JOB_CATALOG.executive_assistant.name);
 
   const handleTaskChange = (t: JobType) => {
     setTaskType(t);
-    setTitle(JOB_REGISTRY[t]?.name ?? t);
+    setTitle(JOB_CATALOG[t]?.name ?? t);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const cron = PRESET_SCHEDULES[scheduleKey].cron;
-    onCreate({ title, task_type: taskType, cron_schedule: cron });
+    onCreate({ title, task_type: taskType, schedule_key: scheduleKey });
   };
 
   return (
@@ -202,9 +209,9 @@ function CreateScheduleModal({ onClose, onCreate, creating }: CreateModalProps) 
                 onChange={(e) => handleTaskChange(e.target.value as JobType)}
                 className="w-full appearance-none rounded-xl bg-white/[0.06] border border-white/10 text-white text-sm px-3 py-2.5 pr-8 focus:outline-none focus:border-emerald-500/50 transition-colors"
               >
-                {ALL_JOB_TYPES.filter((t) => t !== "bi_analysis").map((t) => (
+                {SCHEDULABLE_JOB_TYPES.map((t) => (
                   <option key={t} value={t} className="bg-[#141518]">
-                    {JOB_REGISTRY[t].name}
+                    {JOB_CATALOG[t].name}
                   </option>
                 ))}
               </select>
@@ -282,50 +289,44 @@ export default function TasksPage() {
   const [togglingId, setTogglingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
+  const scheduleRequest = useCallback(async (init?: RequestInit, suffix = "") => {
+    if (!user) throw new Error("Sign in to manage schedules.");
+    const response = await sellerplusApiFetch(`/api/schedules${suffix}`, init);
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error || "Schedule request failed.");
+    return body;
+  }, [user]);
+
   const fetchSchedules = useCallback(async (isRefresh = false) => {
     if (!user) return;
     if (isRefresh) setRefreshing(true);
     else setLoading(true);
     try {
-      const { supabase } = await import("@/lib/supabase");
-      const { data, error } = await supabase
-        .from("ai_schedules")
-        .select("*")
-        .order("created_at", { ascending: false });
-      if (error) throw error;
-      setSchedules((data ?? []) as AiSchedule[]);
+      const body = await scheduleRequest();
+      setSchedules((body.data ?? []) as AiSchedule[]);
     } catch (err: any) {
       showError("Failed to load schedules", err.message);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [user]);
+  }, [scheduleRequest, showError, user]);
 
   useEffect(() => { fetchSchedules(); }, [fetchSchedules]);
 
-  const handleCreate = async (data: { title: string; task_type: JobType; cron_schedule: string }) => {
+  const handleCreate = async (data: { title: string; task_type: JobType; schedule_key: PresetScheduleKey }) => {
     if (!user) return;
     setCreating(true);
     try {
-      const { nextCronRunAfter } = await import("@/lib/jobs/cron-utils");
-      const nextRun = nextCronRunAfter(data.cron_schedule);
-
-      const { supabase } = await import("@/lib/supabase");
-      const { error } = await supabase.from("ai_schedules").insert({
-        user_id: user.id,
+      await scheduleRequest({
+        method: "POST",
+        body: JSON.stringify({
         title: data.title,
-        task_type: data.task_type,
-        cron_schedule: data.cron_schedule,
-        status: "active",
-        next_run: nextRun.toISOString(),
+          taskType: data.task_type,
+          scheduleKey: data.schedule_key,
+        }),
       });
-      if (error) throw error;
-      success("Schedule created", `"${data.title}" will run ${PRESET_SCHEDULES[
-        Object.keys(PRESET_SCHEDULES).find(
-          (k) => PRESET_SCHEDULES[k as PresetScheduleKey].cron === data.cron_schedule
-        ) as PresetScheduleKey
-      ]?.label ?? data.cron_schedule}".`);
+      success("Schedule created", `"${data.title}" will run ${PRESET_SCHEDULES[data.schedule_key].label}.`);
       setShowCreate(false);
       fetchSchedules();
     } catch (err: any) {
@@ -338,15 +339,13 @@ export default function TasksPage() {
   const handleToggle = async (id: string, currentStatus: "active" | "paused") => {
     setTogglingId(id);
     try {
-      const { supabase } = await import("@/lib/supabase");
       const newStatus = currentStatus === "active" ? "paused" : "active";
-      const { error } = await supabase
-        .from("ai_schedules")
-        .update({ status: newStatus })
-        .eq("id", id);
-      if (error) throw error;
+      const body = await scheduleRequest({
+        method: "PATCH",
+        body: JSON.stringify({ id, status: newStatus }),
+      });
       setSchedules((prev) =>
-        prev.map((s) => (s.id === id ? { ...s, status: newStatus } : s))
+        prev.map((s) => (s.id === id ? { ...s, ...body.data } : s))
       );
       success(newStatus === "active" ? "Schedule resumed" : "Schedule paused", "");
     } catch (err: any) {
@@ -359,9 +358,7 @@ export default function TasksPage() {
   const handleDelete = async (id: string) => {
     setDeletingId(id);
     try {
-      const { supabase } = await import("@/lib/supabase");
-      const { error } = await supabase.from("ai_schedules").delete().eq("id", id);
-      if (error) throw error;
+      await scheduleRequest({ method: "DELETE" }, `?id=${encodeURIComponent(id)}`);
       setSchedules((prev) => prev.filter((s) => s.id !== id));
       success("Schedule deleted", "");
     } catch (err: any) {
@@ -406,7 +403,7 @@ export default function TasksPage() {
         {[
           { label: "Active Schedules", value: activeCount, color: "text-emerald-400" },
           { label: "Total Schedules",  value: schedules.length, color: "text-white/70" },
-          { label: "Task Types Available", value: ALL_JOB_TYPES.length - 1, color: "text-sky-400" },
+          { label: "Task Types Available", value: SCHEDULABLE_JOB_TYPES.length, color: "text-sky-400" },
         ].map((stat) => (
           <div key={stat.label} className="rounded-2xl border border-white/8 bg-white/[0.04] p-4">
             <p className={cn("text-2xl font-bold", stat.color)}>{stat.value}</p>

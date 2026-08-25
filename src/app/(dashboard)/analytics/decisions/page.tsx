@@ -2,8 +2,8 @@
 
 import React, { useState, useEffect } from "react";
 import { useAuth } from "@/hooks/use-auth";
-import { supabase } from "@/lib/supabase";
-import { GitPullRequest, Search, CheckCircle, XCircle, Clock, AlertTriangle } from "lucide-react";
+import { sellerplusApiFetch } from "@/lib/client/api-fetch";
+import { GitPullRequest, Search, CheckCircle, XCircle, Clock } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface DecisionEntry {
@@ -13,8 +13,7 @@ interface DecisionEntry {
   confidence: number;
   lifecycle: string; // Draft, Validated, Pending Approval, Approved, Executing, Completed, Rolled Back, Archived
   created_at: string;
-  simulation: any;
-  actual_result?: string; // We can add this later, mock for now
+  simulation: { expectedCase?: { expectedProfitImpact?: number } } | null;
 }
 
 export default function DecisionJournalPage() {
@@ -22,19 +21,21 @@ export default function DecisionJournalPage() {
   const [entries, setEntries] = useState<DecisionEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     async function fetchDecisions() {
       if (!user) return;
-      const { data, error } = await supabase
-        .from("ai_recommendation_history")
-        .select("*")
-        .order("created_at", { ascending: false });
-        
-      if (data && !error) {
-        setEntries(data as DecisionEntry[]);
+      try {
+        const response = await sellerplusApiFetch("/api/ai/decisions?limit=200");
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.error || "Decision history is unavailable.");
+        setEntries(body.data ?? []);
+      } catch (error) {
+        setLoadError(error instanceof Error ? error.message : "Decision history is unavailable.");
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     }
     fetchDecisions();
   }, [user]);
@@ -53,7 +54,7 @@ export default function DecisionJournalPage() {
             Decision Journal
           </h1>
           <p className="text-muted-foreground mt-1">
-            Track historical AI recommendations, their expected outcomes, and real results.
+            Track historical AI recommendations, projected outcomes, and measurement status.
           </p>
         </div>
         <div className="relative w-full md:w-72">
@@ -73,6 +74,10 @@ export default function DecisionJournalPage() {
           {[1,2,3].map(i => (
             <div key={i} className="h-32 bg-card rounded-xl border animate-pulse" />
           ))}
+        </div>
+      ) : loadError ? (
+        <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-5 text-sm text-red-500">
+          {loadError}
         </div>
       ) : filtered.length === 0 ? (
         <div className="text-center py-20 bg-card rounded-xl border">
@@ -108,9 +113,9 @@ export default function DecisionJournalPage() {
                   <div>
                     <span className="text-xs font-semibold text-muted-foreground uppercase block mb-1">Expected Outcome</span>
                     <p className="text-sm">
-                      {entry.simulation?.expectedCase?.expectedProfitImpact ? (
+                      {typeof entry.simulation?.expectedCase?.expectedProfitImpact === "number" ? (
                         <span className={entry.simulation.expectedCase.expectedProfitImpact > 0 ? "text-green-500" : "text-red-500"}>
-                          {entry.simulation.expectedCase.expectedProfitImpact > 0 ? "+" : ""}₹{entry.simulation.expectedCase.expectedProfitImpact} Profit
+                          {entry.simulation.expectedCase.expectedProfitImpact > 0 ? "+" : ""}₹{entry.simulation.expectedCase.expectedProfitImpact} projected
                         </span>
                       ) : "N/A"}
                     </p>
@@ -118,8 +123,9 @@ export default function DecisionJournalPage() {
                   <div>
                     <span className="text-xs font-semibold text-muted-foreground uppercase block mb-1">Actual Result</span>
                     <p className="text-sm text-muted-foreground">
-                      {entry.actual_result || "Pending evaluation..."}
+                      Not measured
                     </p>
+                    <p className="mt-1 text-xs text-muted-foreground/70">No automatic outcome attribution is configured.</p>
                   </div>
                 </div>
               </div>

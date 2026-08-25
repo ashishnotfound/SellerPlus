@@ -6,16 +6,15 @@
  */
 
 export class SingleFlight {
-  private active = new Map<string, Promise<any>>();
+  private active = new Map<string, Promise<unknown>>();
 
   /**
    * Coalesces concurrent calls to 'fn' sharing the same 'key'.
    */
-  async execute<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  async execute<T>(key: string, fn: () => Promise<T>): Promise<{ value: T; executed: boolean }> {
     const existing = this.active.get(key);
     if (existing) {
-      console.log(`[SingleFlight] Coalescing duplicate request key: ${key.substring(0, 10)}...`);
-      return existing as Promise<T>;
+      return { value: await (existing as Promise<T>), executed: false };
     }
 
     const promise = fn().finally(() => {
@@ -23,7 +22,7 @@ export class SingleFlight {
     });
 
     this.active.set(key, promise);
-    return promise;
+    return { value: await promise, executed: true };
   }
 }
 

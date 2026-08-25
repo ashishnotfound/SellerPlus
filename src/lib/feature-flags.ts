@@ -6,7 +6,7 @@
  * active environment defaults, and deterministic user percentage rollouts.
  */
 
-import { getAdminClient } from "@/lib/auth-middleware";
+import { getAdminClient } from "@/lib/supabase/admin";
 
 export interface FeatureFlag {
   key: string;
@@ -64,8 +64,22 @@ function setCachedFlag(key: string, value: boolean): void {
  * Resolves recursive parent dependencies, environment defaults, and percentage rollouts.
  * Results are cached in-process for 60 seconds to reduce DB load.
  */
-export async function isFeatureEnabled(key: string, userId?: string): Promise<boolean> {
-  const cacheKey = `${key}:${userId ?? "global"}`;
+export interface FeatureFlagContext {
+  workspaceId?: string;
+  userId?: string;
+}
+
+export async function isFeatureEnabled(
+  key: string,
+  context: FeatureFlagContext = {},
+  visited = new Set<string>(),
+): Promise<boolean> {
+  if (visited.has(key)) {
+    console.warn(`[FeatureFlag] Cyclic dependency detected for "${key}".`);
+    return false;
+  }
+  const nextVisited = new Set(visited).add(key);
+  const cacheKey = `${context.workspaceId ?? "platform"}:${key}:${context.userId ?? "all"}`;
   const cached = getCachedFlag(cacheKey);
   if (cached !== undefined) return cached;
 
@@ -90,7 +104,7 @@ export async function isFeatureEnabled(key: string, userId?: string): Promise<bo
   // 2. Evaluate dependency chain recursively to avoid cyclic resolution lockouts
   if (typedFlag.dependencies && typedFlag.dependencies.length > 0) {
     for (const depKey of typedFlag.dependencies) {
-      const isDepEnabled = await isFeatureEnabled(depKey, userId);
+      const isDepEnabled = await isFeatureEnabled(depKey, context, nextVisited);
       if (!isDepEnabled) {
         setCachedFlag(cacheKey, false);
         return false;
@@ -99,12 +113,13 @@ export async function isFeatureEnabled(key: string, userId?: string): Promise<bo
   }
 
   // 3. Check for specific user override in feature_flag_overrides
-  if (userId) {
+  if (context.workspaceId && context.userId) {
     const { data: override } = await adminClient
       .from("feature_flag_overrides")
       .select("is_enabled")
+      .eq("workspace_id", context.workspaceId)
       .eq("flag_key", key)
-      .eq("user_id", userId)
+      .eq("user_id", context.userId)
       .maybeSingle();
 
     if (override) {
@@ -120,8 +135,8 @@ export async function isFeatureEnabled(key: string, userId?: string): Promise<bo
   }
 
   // 5. Evaluate rollout percentage rules (A/B testing)
-  if (userId && typedFlag.rules?.rollout_percentage !== undefined) {
-    const userPercent = hashUserIdToPercentage(userId);
+  if (context.userId && typedFlag.rules?.rollout_percentage !== undefined) {
+    const userPercent = hashUserIdToPercentage(`${context.workspaceId ?? "platform"}:${context.userId}`);
     const targetPercent = typedFlag.rules.rollout_percentage;
     if (userPercent >= targetPercent) {
       setCachedFlag(cacheKey, false);

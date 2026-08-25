@@ -12,13 +12,11 @@ import {
   UserX, 
   Search, 
   UserCheck, 
-  Eye, 
   Lock, 
   History,
   CheckCircle,
   AlertTriangle
 } from "lucide-react";
-import { supabase } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 
 interface MerchantProfile {
@@ -45,7 +43,6 @@ interface AuditLog {
 
 export default function AdminSuperPanel() {
   const user = useAuth((s) => s.user);
-  const impersonateUser = useAuth((s) => s.impersonateUser);
   
   const [merchants, setMerchants] = useState<MerchantProfile[]>([]);
   const [loading, setLoading] = useState(true);
@@ -63,87 +60,18 @@ export default function AdminSuperPanel() {
   const fetchGlobalData = async () => {
     setLoading(true);
     try {
-      // 1. Fetch profiles
-      const { data: profiles, error: pErr } = await supabase
-        .from("profiles")
-        .select("*")
-        .order("created_at", { ascending: false });
+      const response = await fetch("/api/admin/overview", { cache: "no-store" });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Unable to load admin data.");
 
-      if (pErr) throw pErr;
-
-      // 2. Fetch workspace memberships
-      const { data: memberships } = await supabase
-        .from("workspace_members")
-        .select("user_id, role, workspaces(name)");
-
-      // 3. Fetch subscriptions
-      const { data: subs } = await supabase
-        .from("subscriptions")
-        .select("user_id, plan_type, status");
-
-      // Map relational metadata
-      const mapped: MerchantProfile[] = (profiles || []).map((p: any) => {
-        const member = memberships?.find((m: any) => m.user_id === p.id);
-        const sub = subs?.find((s: any) => s.user_id === p.id);
-        const wObj = member?.workspaces;
-        const wName = Array.isArray(wObj) ? (wObj[0] as any)?.name : (wObj as any)?.name;
-
-        return {
-          id: p.id,
-          email: p.email,
-          full_name: p.full_name,
-          role: p.role,
-          is_super_admin: p.is_super_admin,
-          is_suspended: p.is_suspended,
-          created_at: p.created_at,
-          workspaceName: wName || "No Workspace",
-          workspaceRole: member?.role || "none",
-          subscriptionPlan: sub?.plan_type || "free",
-          subscriptionStatus: sub?.status || "active"
-        };
-      });
-
-      setMerchants(mapped);
-
-      // Compute statistics
-      const paidCount = subs?.filter((s: any) => s.plan_type !== "free" && s.status === "active").length || 0;
-      const suspCount = profiles?.filter((p: any) => p.is_suspended).length || 0;
-      
-      const uniqueWorkspaces = new Set(
-        memberships?.map((m: any) => {
-          const w = m.workspaces;
-          return Array.isArray(w) ? (w[0] as any)?.name : (w as any)?.name;
-        }).filter(Boolean)
-      ).size;
-
-      setStats({
-        totalUsers: profiles?.length || 0,
-        totalWorkspaces: uniqueWorkspaces || 1,
-        activePaidSubs: paidCount,
-        suspendedCount: suspCount
-      });
-
-      // Fetch real audit logs
-      const { data: auditData } = await supabase
-        .from("admin_audit_logs")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .limit(20);
-
-      if (auditData) {
-        setAuditLogs(auditData.map((log: any) => ({
-          id: log.id,
-          action: log.action,
-          entity: log.entity,
-          timestamp: log.created_at,
-          email: log.admin_email || "System",
-        })));
-      } else {
-        setAuditLogs([]);
-      }
-
-    } catch (e: any) {
-      console.error("Failed to load admin stats", e.message);
+      setMerchants(payload.data.merchants);
+      setStats(payload.data.stats);
+      setAuditLogs(payload.data.auditLogs);
+    } catch (error) {
+      useToastStore.getState().error(
+        "Admin data unavailable",
+        error instanceof Error ? error.message : "Unable to load admin data.",
+      );
     } finally {
       setLoading(false);
     }
@@ -157,49 +85,24 @@ export default function AdminSuperPanel() {
 
   const handleToggleSuspension = async (merchantId: string, currentSuspended: boolean) => {
     try {
-      const { error } = await supabase
-        .from("profiles")
-        .update({ is_suspended: !currentSuspended })
-        .eq("id", merchantId);
-
-      if (error) {
-        useToastStore.getState().error("Action Failed", "Failed to toggle suspension state: " + error.message);
-      } else {
-        await supabase.from("admin_audit_logs").insert({
-          action: !currentSuspended ? "USER_SUSPENDED" : "USER_RESTORED",
-          entity: "Merchant Profile",
-          admin_id: user?.id,
-          admin_email: user?.email,
-          target_user_id: merchantId
-        });
-        useToastStore.getState().success("Status Updated", currentSuspended ? "Account unsuspended successfully!" : "Account suspended successfully!");
-        fetchGlobalData();
-      }
-    } catch (err: any) {
-      useToastStore.getState().error("Action Error", "Error toggle suspension: " + err.message);
-    }
-  };
-
-  const handleImpersonate = async (merchant: MerchantProfile) => {
-    if (merchant.is_super_admin) {
-      useToastStore.getState().error("Security Block", "Impersonating other super-admins is forbidden.");
-      return;
-    }
-    const confirm = window.confirm(`Access Gate: Impersonate user ${merchant.email}? You will view dashboard widgets mapped to their workspace.`);
-    if (confirm) {
-      await supabase.from("admin_audit_logs").insert({
-        action: "IMPERSONATION_STARTED",
-        entity: "Merchant Profile",
-        admin_id: user?.id,
-        admin_email: user?.email,
-        target_user_id: merchant.id
+      const response = await fetch(`/api/admin/users/${merchantId}/suspension`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ suspended: !currentSuspended }),
       });
-      impersonateUser({
-        id: merchant.id,
-        email: merchant.email,
-        fullName: merchant.full_name || merchant.email.split("@")[0].toUpperCase()
-      });
-      window.location.href = "/dashboard";
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Unable to update this account.");
+
+      useToastStore.getState().success(
+        "Status updated",
+        currentSuspended ? "Account access restored." : "Account access suspended.",
+      );
+      await fetchGlobalData();
+    } catch (error) {
+      useToastStore.getState().error(
+        "Action failed",
+        error instanceof Error ? error.message : "Unable to update this account.",
+      );
     }
   };
 
@@ -368,13 +271,6 @@ export default function AdminSuperPanel() {
                           <td>
                             <div className="flex items-center justify-end gap-2">
                               <button
-                                onClick={() => handleImpersonate(m)}
-                                className="h-8 px-2.5 rounded-lg bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 border border-indigo-500/20 font-bold text-[10px] uppercase flex items-center gap-1 transition-all"
-                                title="Log in context as this user"
-                              >
-                                <Eye className="w-3.5 h-3.5" /> Impersonate
-                              </button>
-                              <button
                                 onClick={() => handleToggleSuspension(m.id, m.is_suspended)}
                                 className={cn(
                                   "h-8 px-2.5 rounded-lg font-bold text-[10px] uppercase border transition-all flex items-center gap-1",
@@ -441,7 +337,7 @@ export default function AdminSuperPanel() {
               <h3 className="text-sm font-bold text-white">RBAC Security Notice</h3>
             </div>
             <p className="text-[10px] text-zinc-400 leading-relaxed">
-              Workspace owners retain full billing administration. Impersonating users restricts active session tokens to default workspace credentials, keeping user data isolated.
+              Administrative actions are performed by authenticated server endpoints, permission checked, and recorded in the audit trail. Seller sessions are never impersonated in the browser.
             </p>
           </GlassCard>
         </div>

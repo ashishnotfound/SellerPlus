@@ -11,8 +11,8 @@
 
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { authenticateWithDevFallback, authErrorResponse } from "@/lib/auth-middleware";
-import { publishListingDraft } from "@/lib/ai/listing-draft";
+import { authenticate, authErrorResponse, requirePermission } from "@/lib/auth-middleware";
+import { approveListingDraft } from "@/lib/ai/listing-draft";
 import { log } from "@/lib/logger";
 
 const RequestSchema = z.object({
@@ -21,7 +21,8 @@ const RequestSchema = z.object({
 
 export async function POST(request: Request): Promise<NextResponse> {
   try {
-    const user = await authenticateWithDevFallback(request);
+    const user = await authenticate(request);
+    requirePermission(user, "listing.publish");
 
     const rawBody = await request.json().catch(() => null);
     const parsed = RequestSchema.safeParse(rawBody);
@@ -35,21 +36,27 @@ export async function POST(request: Request): Promise<NextResponse> {
 
     const { listingId } = parsed.data;
 
-    // Call service layer to archive historical version and set active
-    await publishListingDraft(listingId, user.userId, user.supabaseAdmin);
+    // Approval is recorded locally. Marketplace submission requires a separate
+    // deterministic Listings Items/Feeds executor and must never be faked.
+    await approveListingDraft(listingId, user.workspaceId, user.userId, user.supabaseAdmin);
 
-    log.info(`[PublishListingDraft] Published listing ${listingId}`, undefined, {
+    log.info(`[PublishListingDraft] Approved listing ${listingId}`, undefined, {
       userId: user.userId,
+      workspaceId: user.workspaceId,
       listingId,
     });
 
-    return NextResponse.json({ success: true, message: "Listing published successfully." });
+    return NextResponse.json({
+      success: true,
+      publicationState: "approved",
+      message: "Listing approved for publishing. No marketplace change has been submitted yet.",
+    });
   } catch (err: any) {
     const { body, status } = authErrorResponse(err);
     if (status !== 500) {
       return NextResponse.json(body, { status });
     }
     log.error("[PublishListingDraft] Exception:", undefined, { error: err.message });
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    return NextResponse.json({ error: "The listing could not be approved for publishing." }, { status: 500 });
   }
 }

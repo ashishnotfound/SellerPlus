@@ -21,7 +21,7 @@
 
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { authenticateWithDevFallback, authErrorResponse } from "@/lib/auth-middleware";
+import { authenticate, authErrorResponse, requirePermission } from "@/lib/auth-middleware";
 import { jobService } from "@/lib/jobs/job-service";
 import { log } from "@/lib/logger";
 
@@ -36,7 +36,8 @@ const RequestSchema = z.object({
 
 export async function POST(request: Request): Promise<NextResponse> {
   try {
-    const user = await authenticateWithDevFallback(request);
+    const user = await authenticate(request);
+    requirePermission(user, "catalog.write");
 
     const rawBody = await request.json().catch(() => null);
     const parsed = RequestSchema.safeParse(rawBody);
@@ -52,6 +53,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       type: "create_listing_draft",
       payload: parsed.data as Record<string, unknown>,
       userId: user.userId,
+      workspaceId: user.workspaceId,
       priority: 4,
       maxAttempts: 2,
     });

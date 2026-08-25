@@ -98,14 +98,14 @@ export function RecommendationCard({ recommendation, onApprove, onReject, onExec
           </div>
           {recommendation.action && (
             <div className="flex items-center gap-1 ml-auto">
-              <Badge variant="outline" className="bg-primary/5">Automated Action Ready</Badge>
+              <Badge variant="outline" className="bg-primary/5">Suggested action — review only</Badge>
             </div>
           )}
         </div>
       </CardContent>
 
       <CardFooter className="bg-muted/20 border-t p-4 flex gap-2 justify-end">
-        {(recommendation.lifecycle === "Pending Approval" || recommendation.lifecycle === "Draft") && (
+        {(recommendation.lifecycle === "Pending Approval" || recommendation.lifecycle === "Draft") && onApprove && onReject && (
           <>
             <Button variant="outline" size="sm" onClick={() => onReject?.(recommendation.id)} className="gap-1">
               <XCircle className="w-4 h-4" /> Reject
@@ -115,7 +115,7 @@ export function RecommendationCard({ recommendation, onApprove, onReject, onExec
             </Button>
           </>
         )}
-        {recommendation.lifecycle === "Approved" && recommendation.action && (
+        {recommendation.lifecycle === "Approved" && recommendation.action && onExecute && (
           <Button variant="default" size="sm" onClick={() => onExecute?.(recommendation.id)} className="gap-1 bg-green-600 hover:bg-green-700">
             <PlayCircle className="w-4 h-4" /> Execute Now
           </Button>

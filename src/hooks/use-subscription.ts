@@ -15,7 +15,7 @@
 "use client";
 
 import { create } from "zustand";
-import { supabase } from "@/lib/supabase";
+import { sellerplusApiFetch } from "@/lib/client/api-fetch";
 
 export type PlanId = "free" | "weekly" | "pro" | "business";
 
@@ -145,14 +145,7 @@ export const useSubscription = create<SubscriptionState>((set, get) => ({
   loadSubscription: () => {
     // Step 2: Sync from server (non-blocking)
     if (isBrowser) {
-      supabase.auth.getSession().then(({ data: { session } }: any) => {
-        fetch("/api/billing/verify-plan", {
-          method: "GET",
-          headers: {
-            ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
-          },
-          credentials: "omit",
-        })
+      sellerplusApiFetch("/api/billing/verify-plan", { method: "GET" })
           .then((res) => {
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             return res.json();
@@ -179,10 +172,8 @@ export const useSubscription = create<SubscriptionState>((set, get) => ({
           set(serverState);
         })
         .catch((err) => {
-          console.warn("[Subscription] Server sync failed, using cached state:", err.message);
           set({ syncError: err.message });
         });
-      });
     }
   },
 }));

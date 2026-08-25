@@ -21,10 +21,10 @@ export async function GET(req: Request) {
 
     const adminClient = getAdminClient();
     const { data, error } = await adminClient
-      .from("bi_jobs")
-      .select("id, status, result, error, created_at, started_at, completed_at")
+      .from("jobs")
+      .select("id, status, result, last_error, created_at, started_at, completed_at")
       .eq("id", jobId)
-      .eq("user_id", user.userId) // Enforce tenant isolation — users can only see their own jobs
+      .eq("workspace_id", user.workspaceId)
       .maybeSingle();
 
     if (error || !data) {
@@ -35,7 +35,7 @@ export async function GET(req: Request) {
       jobId: data.id,
       status: data.status,
       result: data.result ?? null,
-      error: data.error ?? null,
+      error: data.last_error ?? null,
       createdAt: data.created_at,
       startedAt: data.started_at,
       completedAt: data.completed_at,

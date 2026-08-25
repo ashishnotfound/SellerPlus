@@ -1,120 +1,116 @@
 import { NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { z } from "zod";
+import {
+  authenticate,
+  authErrorResponse,
+  requirePermission,
+} from "@/lib/auth-middleware";
 
-interface LLMTestPayload {
-  provider: "gemini" | "openai" | "anthropic" | "deepseek" | "openrouter" | "ollama";
-  api_key: string;
-  model_name: string;
-  endpoint_url?: string;
+const requestSchema = z.object({
+  provider: z.enum(["gemini", "openai", "anthropic", "deepseek", "openrouter", "nvidia"]),
+  api_key: z.string().min(8).max(4096),
+  model_name: z.string().min(1).max(200),
+}).strict();
+
+const openAiCompatibleEndpoints = {
+  openai: "https://api.openai.com/v1/chat/completions",
+  deepseek: "https://api.deepseek.com/chat/completions",
+  openrouter: "https://openrouter.ai/api/v1/chat/completions",
+  nvidia: "https://integrate.api.nvidia.com/v1/chat/completions",
+} as const;
+
+const testPrompt = "Reply with exactly CONNECTED.";
+
+async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+  return fetch(url, { ...init, signal: AbortSignal.timeout(12_000), cache: "no-store" });
 }
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json() as LLMTestPayload;
-    const { provider, api_key, model_name, endpoint_url } = body;
-
-    if (!provider || !model_name) {
-      return NextResponse.json({ success: false, error: "Missing provider or model name" }, { status: 400 });
-    }
-
-    if (provider !== "ollama" && !api_key) {
-      return NextResponse.json({ success: false, error: "Missing API Key for this provider" }, { status: 400 });
-    }
-
-    const testPrompt = "Hello. Respond with exactly the word 'CONNECTED' to confirm connection.";
+    const actor = await authenticate(request);
+    requirePermission(actor, "settings.manage");
+    const input = requestSchema.parse(await request.json());
     let reply = "";
 
-    switch (provider) {
-      case "gemini": {
-        const genAI = new GoogleGenerativeAI(api_key);
-        const model = genAI.getGenerativeModel({ model: model_name });
-        const result = await model.generateContent(testPrompt);
-        reply = result.response.text();
-        break;
-      }
-      
-      case "openai":
-      case "deepseek":
-      case "openrouter":
-      case "ollama": {
-        let endpoint = "";
-        if (provider === "openai") endpoint = "https://api.openai.com/v1/chat/completions";
-        else if (provider === "deepseek") endpoint = "https://api.deepseek.com/chat/completions";
-        else if (provider === "openrouter") endpoint = "https://openrouter.ai/api/v1/chat/completions";
-        else if (provider === "ollama") endpoint = endpoint_url || "http://localhost:11434/v1/chat/completions";
-        
-        const headers: Record<string, string> = {
-          "Content-Type": "application/json",
-        };
-        
-        if (api_key) {
-          headers["Authorization"] = `Bearer ${api_key}`;
-        }
-        
-        const payload = {
-          model: model_name,
-          messages: [{ role: "user", content: testPrompt }],
-          max_tokens: 10
-        };
-        
-        const res = await fetch(endpoint, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(payload),
-        });
-        
-        if (!res.ok) {
-          const errText = await res.text();
-          return NextResponse.json({ success: false, error: `HTTP ${res.status}: ${errText}` });
-        }
-        
-        const data = await res.json();
-        reply = data.choices?.[0]?.message?.content || "";
-        break;
-      }
-      
-      case "anthropic": {
-        const endpoint = "https://api.anthropic.com/v1/messages";
-        const headers = {
-          "x-api-key": api_key,
+    if (input.provider === "gemini") {
+      const client = new GoogleGenerativeAI(input.api_key);
+      const model = client.getGenerativeModel({ model: input.model_name });
+      const result = await Promise.race([
+        model.generateContent(testPrompt),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("Provider connection timed out.")), 12_000),
+        ),
+      ]);
+      reply = result.response.text();
+    } else if (input.provider === "anthropic") {
+      const response = await fetchWithTimeout("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "x-api-key": input.api_key,
           "anthropic-version": "2023-06-01",
           "content-type": "application/json",
-        };
-        
-        const payload = {
-          model: model_name,
+        },
+        body: JSON.stringify({
+          model: input.model_name,
           max_tokens: 10,
           messages: [{ role: "user", content: testPrompt }],
-        };
-        
-        const res = await fetch(endpoint, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(payload),
-        });
-        
-        if (!res.ok) {
-          const errText = await res.text();
-          return NextResponse.json({ success: false, error: `HTTP ${res.status}: ${errText}` });
-        }
-        
-        const data = await res.json();
-        reply = data.content?.[0]?.text || "";
-        break;
+        }),
+      });
+      if (!response.ok) {
+        return NextResponse.json(
+          { success: false, error: `Provider rejected the connection (HTTP ${response.status}).` },
+          { status: 422 },
+        );
       }
-      
-      default:
-        return NextResponse.json({ success: false, error: "Unsupported provider" });
+      const data = await response.json();
+      reply = data.content?.[0]?.text ?? "";
+    } else {
+      const endpoint = openAiCompatibleEndpoints[input.provider];
+      const response = await fetchWithTimeout(endpoint, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${input.api_key}`,
+          ...(input.provider === "openrouter"
+            ? { "http-referer": new URL(request.url).origin, "x-title": "SellerPlus" }
+            : {}),
+        },
+        body: JSON.stringify({
+          model: input.model_name,
+          messages: [{ role: "user", content: testPrompt }],
+          max_tokens: 10,
+        }),
+      });
+      if (!response.ok) {
+        return NextResponse.json(
+          { success: false, error: `Provider rejected the connection (HTTP ${response.status}).` },
+          { status: 422 },
+        );
+      }
+      const data = await response.json();
+      reply = data.choices?.[0]?.message?.content ?? "";
     }
 
-    return NextResponse.json({ 
-      success: true, 
-      message: `Successfully connected to ${provider.toUpperCase()}`,
-      response: reply.trim()
+    return NextResponse.json({
+      success: /^connected[.!\s]*$/i.test(reply.trim()),
+      provider: input.provider,
+      response: reply.trim().slice(0, 100),
     });
-
-  } catch (error: any) {
-    console.error("[TestGateway] Connection failed:", error);
-    return NextResponse.json({ success: false, error: error.message || "Failed to reach the provider." });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return NextResponse.json(
+        { success: false, error: "Invalid AI provider configuration." },
+        { status: 400 },
+      );
+    }
+    const auth = authErrorResponse(error);
+    if (auth.status !== 500) {
+      return NextResponse.json({ success: false, ...auth.body }, { status: auth.status });
+    }
+    const message = error instanceof Error && error.name === "TimeoutError"
+      ? "Provider connection timed out."
+      : "Unable to verify the provider connection.";
+    return NextResponse.json({ success: false, error: message }, { status: 502 });
   }
 }

@@ -13,7 +13,7 @@ export async function POST(request: Request) {
   const correlationId = "cleanup-" + Date.now();
   
   try {
-    authenticateCron(request);
+    await authenticateCron(request);
     log.info("Starting database log and cache pruning task...", correlationId);
     const adminClient = getAdminClient();
 

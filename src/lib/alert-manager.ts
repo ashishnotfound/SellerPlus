@@ -5,7 +5,7 @@
  * are breached (excessive latency, high failures, budget warnings).
  */
 
-import { getAdminClient } from "@/lib/auth-middleware";
+import { getAdminClient } from "@/lib/supabase/admin";
 import { config } from "@/lib/config";
 import { log } from "./logger";
 

@@ -5,7 +5,7 @@
  * recovery times, failure logs, and overall health status.
  */
 
-import { getAdminClient } from "@/lib/auth-middleware";
+import { getAdminClient } from "@/lib/supabase/admin";
 import { log } from "@/lib/logger";
 
 export async function reportHeartbeat(

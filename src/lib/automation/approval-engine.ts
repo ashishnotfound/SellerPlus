@@ -1,10 +1,5 @@
-import { createClient } from "@supabase/supabase-js";
 import { v4 as uuidv4 } from "uuid";
-import { emitEvent } from "./event-bus";
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
-const supabase = createClient(supabaseUrl, supabaseServiceKey);
+import { getAdminClient } from "@/lib/supabase/admin";
 
 export type ApprovalPolicy = "allow_automatically" | "require_approval" | "never_without_explicit_approval";
 
@@ -25,15 +20,18 @@ export class ApprovalEngine {
    */
   static async evaluateAction(
     userId: string,
+    workspaceId: string,
     actionType: string,
     payload: any,
     correlationId: string
   ): Promise<EvaluationResult> {
     // 1. Fetch the user's policy for this action
+    const supabase = getAdminClient();
     const { data: policyRecord, error: policyError } = await supabase
       .from("approval_policies")
       .select("policy, auto_approve_threshold")
       .eq("user_id", userId)
+      .eq("workspace_id", workspaceId)
       .eq("action_type", actionType)
       .single();
 
@@ -54,18 +52,18 @@ export class ApprovalEngine {
       // Check threshold if applicable (e.g., allow automatic ad budget increases up to $500)
       if (threshold && payload.amount) {
         if (payload.amount > threshold.max_amount) {
-          return await this.createPendingWorkflow(userId, actionType, payload, correlationId, "Threshold exceeded");
+          return await this.createPendingWorkflow(userId, workspaceId, actionType, payload, correlationId, "Threshold exceeded");
         }
       }
       return { status: "approved" };
     }
 
     if (policy === "never_without_explicit_approval") {
-      return await this.createPendingWorkflow(userId, actionType, payload, correlationId, "Action requires explicit approval");
+      return await this.createPendingWorkflow(userId, workspaceId, actionType, payload, correlationId, "Action requires explicit approval");
     }
 
     // default: require_approval
-    return await this.createPendingWorkflow(userId, actionType, payload, correlationId, "Standard approval required");
+    return await this.createPendingWorkflow(userId, workspaceId, actionType, payload, correlationId, "Standard approval required");
   }
 
   /**
@@ -73,6 +71,7 @@ export class ApprovalEngine {
    */
   private static async createPendingWorkflow(
     userId: string,
+    workspaceId: string,
     actionType: string,
     payload: any,
     correlationId: string,
@@ -81,11 +80,13 @@ export class ApprovalEngine {
     const workflowId = uuidv4();
 
     // Store the intent to execute
+    const supabase = getAdminClient();
     const { error: insertError } = await supabase
       .from("workflow_state")
       .insert({
         id: workflowId,
         user_id: userId,
+        workspace_id: workspaceId,
         workflow_type: `approval:${actionType}`,
         current_step: "awaiting_user_approval",
         state_data: { payload, reason },

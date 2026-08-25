@@ -11,6 +11,7 @@ import { z } from "zod";
 export const baseEventSchema = z.object({
   id: z.string().uuid().optional(), // Usually assigned by the DB
   user_id: z.string().uuid().optional(), // Nullable for system-wide events
+  workspace_id: z.string().uuid(),
   correlation_id: z.string(), // Links an entire chain of events/jobs together
   causation_id: z.string().optional(), // The ID of the event that directly caused this one
   created_at: z.string().optional(),

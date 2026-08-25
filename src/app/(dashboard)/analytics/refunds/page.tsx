@@ -1,129 +1,133 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { GlassCard } from "@/components/glass-card";
 import { useToastStore } from "@/hooks/use-toast-store";
 import { useAuth } from "@/hooks/use-auth";
 import { 
-  RotateCcw, AlertTriangle, FileText, DollarSign, TrendingUp, RefreshCw, Download
+  RotateCcw, AlertTriangle, FileText, DollarSign, RefreshCw, Download
 } from "lucide-react";
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid
 } from "recharts";
-import { supabase } from "@/lib/supabase";
+import { sellerplusApiFetch } from "@/lib/client/api-fetch";
 import { cn, formatCurrency } from "@/lib/utils";
+import { createCsv } from "@/lib/csv";
 
 interface RefundRecord {
   id: string;
   refund_id: string;
   order_id: string;
-  sku: string;
-  asin: string;
+  sku: string | null;
+  asin: string | null;
   quantity: number;
   amount: number;
   currency: string;
-  reason: string;
+  reason: string | null;
   status: string;
   processed_at: string;
   marketplace: string;
 }
 
+interface RefundOverview {
+  dataWindow: { since: string; until: string };
+  dataSource: string;
+  sourceUpdatedAt: string | null;
+  summary: { adjustments: number; units: number; amount: number };
+  daily: Array<{ date: string; adjustments: number; units: number; amount: number }>;
+  topSkus: Array<{ sku: string; adjustments: number; units: number; amount: number }>;
+  total: number;
+}
+
 export default function RefundsConsolePage() {
   const user = useAuth((s) => s.user);
   const [refunds, setRefunds] = useState<RefundRecord[]>([]);
+  const [overview, setOverview] = useState<RefundOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [syncJobId, setSyncJobId] = useState<string | null>(null);
+  const [days, setDays] = useState<30 | 90 | 365>(90);
+  const [page, setPage] = useState(1);
+  const pageSize = 50;
 
-  const loadRefunds = async () => {
-    if (!user?.id) return;
+  const apiRequest = useCallback(async (path: string, init?: RequestInit) => {
+    const response = await sellerplusApiFetch(path, init);
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error || "Refund request failed.");
+    return body;
+  }, []);
+
+  const loadRefunds = useCallback(async () => {
+    if (!user?.workspaceId) return;
     setLoading(true);
     try {
-      const { data, error } = await supabase
-        .from("refunds")
-        .select("*")
-        .eq("user_id", user.id)
-        .order("processed_at", { ascending: false });
-      if (!error && data) {
-        setRefunds(data);
-      }
-    } catch (e) {
-      console.error(e);
+      const body = await apiRequest(`/api/refunds?days=${days}&page=${page}&limit=${pageSize}`);
+      setOverview(body.data as RefundOverview);
+      setRefunds((body.data?.rows ?? []) as RefundRecord[]);
+    } catch (error) {
+      useToastStore.getState().error("Refund data unavailable", error instanceof Error ? error.message : "Try again later.");
     } finally {
       setLoading(false);
     }
-  };
+  }, [apiRequest, days, page, user?.workspaceId]);
 
   useEffect(() => {
-    loadRefunds();
-  }, [user?.id]);
+    void loadRefunds();
+  }, [loadRefunds]);
+
+  useEffect(() => {
+    if (!syncJobId) return;
+    let active = true;
+    const timer = window.setTimeout(async () => {
+      let payload;
+      try {
+        payload = await apiRequest(`/api/jobs/${syncJobId}`);
+      } catch (error) {
+        if (!active) return;
+        setIsSyncing(false);
+        setSyncJobId(null);
+        useToastStore.getState().error("Refund sync status unavailable", error instanceof Error ? error.message : "Try again later.");
+        return;
+      }
+      if (!active) return;
+      if (["failed", "canceled"].includes(payload.data?.status)) {
+        setIsSyncing(false);
+        setSyncJobId(null);
+        useToastStore.getState().error("Refund sync stopped", payload.data?.last_error ?? payload.error ?? "The job did not complete.");
+      } else if (payload.data?.status === "completed") {
+        setIsSyncing(false);
+        setSyncJobId(null);
+        await loadRefunds();
+        useToastStore.getState().success("Sync complete", "Amazon financial refund adjustments are up to date.");
+      }
+    }, 5_000);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [apiRequest, loadRefunds, syncJobId]);
 
   const handleSyncRefunds = async () => {
-    if (!user?.id) return;
+    if (!user?.workspaceId) return;
     setIsSyncing(true);
     try {
-      const res = await fetch("/api/amazon/sync-refunds", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: user.id })
+      const data = await apiRequest("/api/amazon/sync-refunds", {
+        method: "POST", body: JSON.stringify({ daysBack: days }),
       });
-      const data = await res.json();
-      if (data.success) {
-        await loadRefunds();
-        useToastStore.getState().success("Sync Complete", "Refund events synchronized successfully!");
-      } else {
-        useToastStore.getState().error("Sync Failed", data.error);
+      if (data.data?.jobId) {
+        setSyncJobId(data.data.jobId);
+        useToastStore.getState().success("Refund sync queued", "SellerPlus will import Amazon financial events in the background.");
       }
-    } catch (e: any) {
-      useToastStore.getState().error("Sync Error", "Error syncing refunds: " + e.message);
-    } finally {
+    } catch (error: unknown) {
+      useToastStore.getState().error("Sync Error", error instanceof Error ? error.message : "Error syncing refunds.");
       setIsSyncing(false);
     }
   };
 
   // Stats
-  const summary = useMemo(() => {
-    const refundCount = refunds.reduce((sum, r) => sum + (r.quantity || 1), 0);
-    const refundValue = refunds.reduce((sum, r) => sum + Number(r.amount || 0), 0);
-    
-    // Group by SKU
-    const skuMap = new Map<string, { sku: string; count: number; value: number }>();
-    refunds.forEach((r) => {
-      const existing = skuMap.get(r.sku);
-      if (existing) {
-        existing.count += r.quantity || 1;
-        existing.value += Number(r.amount || 0);
-      } else {
-        skuMap.set(r.sku, { sku: r.sku, count: r.quantity || 1, value: r.amount || 0 });
-      }
-    });
-
-    const topRefunded = Array.from(skuMap.values())
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 5);
-
-    return {
-      refundCount,
-      refundValue,
-      topRefunded
-    };
-  }, [refunds]);
+  const summary = overview?.summary ?? { adjustments: 0, units: 0, amount: 0 };
 
   // Chart data formatting
   const chartData = useMemo(() => {
-    // Group by date
-    const dateMap = new Map<string, number>();
-    refunds.forEach((r) => {
-      const dateStr = r.processed_at ? r.processed_at.split("T")[0] : "";
-      if (dateStr) {
-        dateMap.set(dateStr, (dateMap.get(dateStr) || 0) + Number(r.amount || 0));
-      }
-    });
-
-    return Array.from(dateMap.entries())
-      .map(([date, amount]) => ({ date, refundCosts: amount }))
-      .sort((a, b) => a.date.localeCompare(b.date))
-      .slice(-7); // last 7 points
-  }, [refunds]);
+    return (overview?.daily ?? []).map((item) => ({ date: item.date, refundCosts: Number(item.amount) }));
+  }, [overview?.daily]);
 
   const triggerExport = () => {
     if (refunds.length === 0) {
@@ -131,9 +135,7 @@ export default function RefundsConsolePage() {
       return;
     }
     const headers = ["Refund ID", "Order ID", "Date", "SKU", "ASIN", "Quantity", "Amount", "Reason"];
-    const csvRows = [headers.join(",")];
-    refunds.forEach((r) => {
-      csvRows.push([
+    const rows = refunds.map((r) => [
         r.refund_id,
         r.order_id,
         r.processed_at ? new Date(r.processed_at).toLocaleDateString() : "",
@@ -141,13 +143,12 @@ export default function RefundsConsolePage() {
         r.asin,
         r.quantity,
         r.amount,
-        `"${r.reason || "Customer return"}"`
-      ].join(","));
-    });
-    const dataStr = "data:text/csv;charset=utf-8," + encodeURIComponent(csvRows.join("\n"));
+        r.reason || "Unspecified source"
+      ]);
+    const dataStr = "data:text/csv;charset=utf-8," + encodeURIComponent(createCsv(headers, rows));
     const downloadAnchor = document.createElement("a");
     downloadAnchor.setAttribute("href", dataStr);
-    downloadAnchor.setAttribute("download", `sellerplus_refunds_report.csv`);
+    downloadAnchor.setAttribute("download", `sellerplus_refund_adjustments_page_${page}.csv`);
     document.body.appendChild(downloadAnchor);
     downloadAnchor.click();
     downloadAnchor.remove();
@@ -160,14 +161,21 @@ export default function RefundsConsolePage() {
         <div>
           <h1 className="text-3xl font-extrabold tracking-tight text-white flex items-center gap-2">
             <RotateCcw className="w-7 h-7 text-rose-400" />
-            Refunds & Returns
+            Refund Financial Adjustments
           </h1>
           <p className="text-zinc-400 text-sm mt-1">
-            Customer returns logging, reimburse claim checks, and product fault metrics.
+            Amazon Finances API refund adjustments. This view does not infer customer return rates or reimbursement eligibility.
           </p>
         </div>
 
         <div className="flex items-center gap-2">
+          <div className="flex rounded-lg border border-white/10 p-0.5">
+            {([30, 90, 365] as const).map((value) => (
+              <button key={value} type="button" onClick={() => { setDays(value); setPage(1); }} className={cn("h-8 rounded-md px-2.5 text-xs font-bold", days === value ? "bg-white/10 text-white" : "text-zinc-500 hover:text-zinc-300")}>
+                {value === 365 ? "1y" : `${value}d`}
+              </button>
+            ))}
+          </div>
           <button
             onClick={handleSyncRefunds}
             disabled={isSyncing}
@@ -180,7 +188,7 @@ export default function RefundsConsolePage() {
             onClick={triggerExport}
             className="h-9 px-3.5 rounded-lg bg-indigo-500 hover:bg-indigo-600 text-white text-xs font-bold transition-all flex items-center gap-1.5"
           >
-            <Download className="w-3.5 h-3.5" /> Export Logs
+            <Download className="w-3.5 h-3.5" /> Export Page
           </button>
         </div>
       </div>
@@ -192,9 +200,9 @@ export default function RefundsConsolePage() {
             <RotateCcw className="w-6 h-6" />
           </div>
           <div>
-            <span className="text-[10px] text-zinc-500 uppercase font-extrabold tracking-wider">Refund Count</span>
-            <h3 className="text-2xl font-black text-white mt-0.5">{summary.refundCount} units</h3>
-            <span className="text-[10px] text-zinc-500 font-medium">Claims processed</span>
+            <span className="text-[10px] text-zinc-500 uppercase font-extrabold tracking-wider">Referenced Units</span>
+            <h3 className="text-2xl font-black text-white mt-0.5">{summary.units}</h3>
+            <span className="text-[10px] text-zinc-500 font-medium">Across imported adjustments</span>
           </div>
         </GlassCard>
 
@@ -204,7 +212,7 @@ export default function RefundsConsolePage() {
           </div>
           <div>
             <span className="text-[10px] text-zinc-500 uppercase font-extrabold tracking-wider">Refund Value</span>
-            <h3 className="text-2xl font-black text-rose-400 mt-0.5">{formatCurrency(summary.refundValue)}</h3>
+            <h3 className="text-2xl font-black text-rose-400 mt-0.5">{formatCurrency(summary.amount)}</h3>
             <span className="text-[10px] text-zinc-500 font-medium">Debit adjustments</span>
           </div>
         </GlassCard>
@@ -214,11 +222,9 @@ export default function RefundsConsolePage() {
             <AlertTriangle className="w-6 h-6" />
           </div>
           <div>
-            <span className="text-[10px] text-zinc-500 uppercase font-extrabold tracking-wider">Return Rate</span>
-            <h3 className="text-2xl font-black text-white mt-0.5">
-              {refunds.length > 0 ? "3.2%" : "0.0%"}
-            </h3>
-            <span className="text-[10px] text-zinc-500 font-medium">Average return rate</span>
+            <span className="text-[10px] text-zinc-500 uppercase font-extrabold tracking-wider">Adjustment Records</span>
+            <h3 className="text-2xl font-black text-white mt-0.5">{summary.adjustments}</h3>
+            <span className="text-[10px] text-zinc-500 font-medium">Amazon-sourced rows</span>
           </div>
         </GlassCard>
       </div>
@@ -228,7 +234,7 @@ export default function RefundsConsolePage() {
         <div className="flex items-center justify-between mb-4">
           <div>
             <h3 className="text-sm font-bold text-white">Refund Cost Trends</h3>
-            <p className="text-xs text-zinc-600">Refund values comparison over last active periods</p>
+            <p className="text-xs text-zinc-600">Daily adjustment value in the selected window</p>
           </div>
         </div>
 
@@ -266,7 +272,7 @@ export default function RefundsConsolePage() {
           <GlassCard className="p-6 h-full flex flex-col justify-between">
             <div className="flex items-center gap-2 mb-4">
               <FileText className="w-5 h-5 text-indigo-400" />
-              <h3 className="text-sm font-bold text-white">Recent Customer Return Logs</h3>
+              <h3 className="text-sm font-bold text-white">Recent Financial Adjustment Records</h3>
             </div>
 
             <div className="overflow-x-auto flex-1">
@@ -284,7 +290,7 @@ export default function RefundsConsolePage() {
                   {refunds.length === 0 ? (
                     <tr>
                       <td colSpan={5} className="h-20 text-center text-zinc-500">
-                        No recent refund logs found.
+                        No refund adjustment records found in this window.
                       </td>
                     </tr>
                   ) : (
@@ -292,14 +298,14 @@ export default function RefundsConsolePage() {
                       <tr key={l.id} className="h-12 hover:bg-white/[0.01]">
                         <td className="font-mono font-bold text-zinc-200">{l.order_id}</td>
                         <td>
-                          <span className="font-bold text-white block max-w-[120px] truncate">{l.sku}</span>
+                          <span className="font-bold text-white block max-w-[120px] truncate">{l.sku || "Not itemized"}</span>
                         </td>
                         <td className="font-bold text-rose-400 font-mono">-{formatCurrency(l.amount)}</td>
                         <td className="text-zinc-500">
                           {l.processed_at ? new Date(l.processed_at).toLocaleDateString() : ""}
                         </td>
-                        <td className="text-[11px] text-zinc-400 max-w-[155px] truncate" title={l.reason}>
-                          {l.reason}
+                        <td className="text-[11px] text-zinc-400 max-w-[155px] truncate" title={l.reason ?? undefined}>
+                          {l.reason ?? "Unspecified by source"}
                         </td>
                       </tr>
                     ))
@@ -319,19 +325,19 @@ export default function RefundsConsolePage() {
             </div>
 
             <div className="flex-1 flex flex-col gap-3.5">
-              {summary.topRefunded.length === 0 ? (
+              {(overview?.topSkus ?? []).length === 0 ? (
                 <div className="flex items-center justify-center h-full text-zinc-500 text-sm">
                   No refund data available.
                 </div>
               ) : (
-                summary.topRefunded.map((item) => (
+                (overview?.topSkus ?? []).map((item) => (
                   <div key={item.sku} className="p-3 rounded-xl border border-white/5 bg-white/[0.01] flex items-center justify-between gap-3">
                     <div className="min-w-0">
                       <span className="text-xs font-bold text-white block truncate">{item.sku}</span>
                     </div>
                     <div className="text-right shrink-0">
-                      <span className="text-xs font-black text-rose-400 block">{item.count} Returns</span>
-                      <span className="text-[10px] text-zinc-500 font-mono block mt-0.5">{formatCurrency(item.value)}</span>
+                      <span className="text-xs font-black text-rose-400 block">{item.units} units</span>
+                      <span className="text-[10px] text-zinc-500 font-mono block mt-0.5">{formatCurrency(item.amount)}</span>
                     </div>
                   </div>
                 ))
@@ -340,6 +346,15 @@ export default function RefundsConsolePage() {
           </GlassCard>
         </div>
       </div>
+      {(overview?.total ?? 0) > pageSize && (
+        <div className="flex items-center justify-between text-xs text-zinc-500">
+          <span>Page {page} of {Math.ceil((overview?.total ?? 0) / pageSize)} · {overview?.total} adjustment rows</span>
+          <div className="flex gap-2">
+            <button type="button" disabled={page === 1} onClick={() => setPage((value) => Math.max(1, value - 1))} className="rounded-md border border-white/10 px-3 py-1.5 text-zinc-300 disabled:opacity-40">Previous</button>
+            <button type="button" disabled={page * pageSize >= (overview?.total ?? 0)} onClick={() => setPage((value) => value + 1)} className="rounded-md border border-white/10 px-3 py-1.5 text-zinc-300 disabled:opacity-40">Next</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

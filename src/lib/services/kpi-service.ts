@@ -12,8 +12,8 @@ export class KPIService {
    * Calculates ACOS (Advertising Cost of Sales)
    * ACOS = (Ad Spend / Ad Sales) * 100
    */
-  static calculateACOS(spend: number, adSales: number): number {
-    if (adSales === 0) return spend > 0 ? 100 : 0;
+  static calculateACOS(spend: number, adSales: number): number | null {
+    if (adSales <= 0) return null;
     return (spend / adSales) * 100;
   }
 
@@ -21,8 +21,8 @@ export class KPIService {
    * Calculates ROAS (Return on Ad Spend)
    * ROAS = (Ad Sales / Ad Spend)
    */
-  static calculateROAS(spend: number, adSales: number): number {
-    if (spend === 0) return adSales > 0 ? 999 : 0; // Infinite/high ROAS
+  static calculateROAS(spend: number, adSales: number): number | null {
+    if (spend <= 0) return null;
     return adSales / spend;
   }
 
@@ -30,8 +30,8 @@ export class KPIService {
    * Calculates TACOS (Total Advertising Cost of Sales)
    * TACOS = (Ad Spend / Total Sales) * 100
    */
-  static calculateTACOS(spend: number, totalSales: number): number {
-    if (totalSales === 0) return spend > 0 ? 100 : 0;
+  static calculateTACOS(spend: number, totalSales: number): number | null {
+    if (totalSales <= 0) return null;
     return (spend / totalSales) * 100;
   }
 
@@ -63,8 +63,8 @@ export class KPIService {
   /**
    * Calculates Days of Supply (Restock Days)
    */
-  static calculateRestockDays(currentInventory: number, dailyVelocity: number): number {
-    if (dailyVelocity === 0) return 999;
+  static calculateRestockDays(currentInventory: number, dailyVelocity: number): number | null {
+    if (dailyVelocity <= 0) return null;
     return currentInventory / dailyVelocity;
   }
 
@@ -84,42 +84,6 @@ export class KPIService {
   static calculateOrganicSalesRatio(organicSales: number, totalSales: number): number {
     if (totalSales === 0) return 0;
     return (organicSales / totalSales) * 100;
-  }
-
-  /**
-   * Calculates the overall Business Health Score (0-100) and its components deterministically.
-   * AI must not calculate or modify this score.
-   */
-  static calculateBusinessHealthScore(
-    acos: number,
-    margin: number,
-    inventoryVelocity: number,
-    organicRatio: number
-  ): { finalScore: number, components: { advertising: number, profitability: number, inventory: number, growth: number } } {
-    
-    // Advertising Health: Good ACOS is < 30%
-    const advertising = Math.min(100, Math.max(0, 100 - (acos > 0 ? Math.max(0, acos - 15) * 1.5 : 0)));
-    
-    // Profitability Health: Good Margin > 20%
-    const profitability = Math.min(100, Math.max(0, margin * 400));
-    
-    // Inventory Health: Velocity > 5 units/day is solid
-    const inventory = Math.min(100, inventoryVelocity * 10);
-    
-    // Growth/Organic Health: High organic ratio is healthy
-    const growth = Math.min(100, organicRatio);
-
-    const finalScore = (advertising * 0.3) + (profitability * 0.4) + (inventory * 0.15) + (growth * 0.15);
-
-    return {
-      finalScore: Math.round(finalScore),
-      components: {
-        advertising: Math.round(advertising),
-        profitability: Math.round(profitability),
-        inventory: Math.round(inventory),
-        growth: Math.round(growth)
-      }
-    };
   }
 
   /**

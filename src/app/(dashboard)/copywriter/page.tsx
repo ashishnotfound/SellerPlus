@@ -12,7 +12,7 @@ import {
   CopyTone,
   FullListingResult,
   CopyVariation,
-} from "@/lib/ai";
+} from "@/lib/ai/client";
 import { cn } from "@/lib/utils";
 import { useSubscription } from "@/hooks/use-subscription";
 import {
@@ -659,8 +659,8 @@ export default function CopywriterPage() {
                       <h3 className="text-sm font-bold text-white">Generated Listing</h3>
                       <p className="text-[10px] text-zinc-600 uppercase tracking-wider">{marketplace} · {tone} · {language}</p>
                     </div>
-                    <div className={`px-2.5 py-1 rounded-lg font-bold text-xs ${fullListingResult.seoScore >= 80 ? "bg-[#00c48c]/10 text-[#00c48c]" : fullListingResult.seoScore >= 60 ? "bg-amber-500/10 text-amber-400" : "bg-rose-500/10 text-rose-400"}`}>
-                      SEO: {fullListingResult.seoScore}/100
+                    <div className={`px-2.5 py-1 rounded-lg font-bold text-xs ${fullListingResult.seoScore >= 80 ? "bg-[#00c48c]/10 text-[#00c48c]" : fullListingResult.seoScore >= 60 ? "bg-amber-500/10 text-amber-400" : "bg-rose-500/10 text-rose-400"}`} title="Deterministic field-completeness check; not an Amazon ranking or performance score.">
+                      Draft completeness: {fullListingResult.seoScore}/100
                     </div>
                   </GlassCard>
                   {[

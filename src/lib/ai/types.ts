@@ -29,12 +29,19 @@ export interface GenerationOptions {
   systemPromptVersion?: string;
   capabilities?: ProviderCapability[];
   correlationId?: string;
+  workspaceId?: string;
+  feature?: string;
 }
 
 export interface GenerationResult {
   text: string;
   tokensUsed?: number;
+  inputTokens?: number;
+  outputTokens?: number;
   estimatedCost?: number;
+  costStatus?: "provider_reported" | "configured_estimate" | "not_applicable" | "unknown";
+  provider?: string;
+  model?: string;
 }
 
 export interface ProviderAdapter {
@@ -47,6 +54,8 @@ export interface LLMSetting {
   api_key: string;
   model_name: string;
   endpoint_url?: string;
+  input_cost_per_million?: number;
+  output_cost_per_million?: number;
   priority: number;
   is_enabled: boolean;
 }

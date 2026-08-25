@@ -6,6 +6,10 @@ import { useAuth } from "@/hooks/use-auth";
 import { useToastStore } from "@/hooks/use-toast-store";
 import { useListingsStore, Listing, ListingStatus, PerformanceBadge, ListingVersion } from "@/hooks/use-listings-store";
 import { cn } from "@/lib/utils";
+import { sellerplusApiFetch } from "@/lib/client/api-fetch";
+import { createCsv } from "@/lib/csv";
+import { escapeHtml } from "@/lib/html";
+import { createXlsx } from "@/lib/xlsx";
 import { 
   Search, Filter, Grid, List, Plus, Settings, ChevronRight, X, Trash2, Edit3, History, 
   Tag, Download, FileJson, Printer, Check, CheckSquare, Square, AlertCircle, AlertTriangle,
@@ -17,6 +21,8 @@ export default function ListingsPage() {
   const listings = useListingsStore((s) => s.listings);
   const versions = useListingsStore((s) => s.versions);
   const loading = useListingsStore((s) => s.loading);
+  const totalListings = useListingsStore((s) => s.total);
+  const listingCounts = useListingsStore((s) => s.counts);
   const loadListings = useListingsStore((s) => s.loadListings);
   const createListing = useListingsStore((s) => s.createListing);
   const updateListing = useListingsStore((s) => s.updateListing);
@@ -32,12 +38,6 @@ export default function ListingsPage() {
   const setManualOverride = useListingsStore((s) => s.setManualOverride);
   const calculatePerformanceBadge = useListingsStore((s) => s.calculatePerformanceBadge);
 
-  useEffect(() => {
-    if (user?.id) {
-      loadListings(user.id);
-    }
-  }, [user?.id, loadListings]);
-
   // UI State
   const [viewMode, setViewMode] = useState<"table" | "card">("table");
   const [searchQuery, setSearchQuery] = useState("");
@@ -46,7 +46,20 @@ export default function ListingsPage() {
   
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 8;
+  const itemsPerPage = 50;
+
+  useEffect(() => {
+    if (!user?.id) return;
+    const timeout = window.setTimeout(() => {
+      void loadListings(user.id, {
+        page: currentPage,
+        pageSize: itemsPerPage,
+        search: searchQuery,
+        filter: selectedFilter,
+      });
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [user?.id, user?.workspaceId, loadListings, currentPage, searchQuery, selectedFilter]);
 
   // Editor Modal
   const [editingListing, setEditingListing] = useState<Listing | null>(null);
@@ -94,20 +107,20 @@ export default function ListingsPage() {
   // Category statistics counts
   const stats = useMemo(() => {
     const counts = {
-      all: listings.length,
-      active: listings.filter(l => l.status === "active").length,
-      inactive: listings.filter(l => l.status === "inactive").length,
-      draft: listings.filter(l => l.status === "draft").length,
-      winners: listings.filter(l => calculatePerformanceBadge(l) === "winner").length,
-      trending: listings.filter(l => calculatePerformanceBadge(l) === "trending").length,
-      profitable: listings.filter(l => calculatePerformanceBadge(l) === "profitable").length,
-      declining: listings.filter(l => calculatePerformanceBadge(l) === "declining").length,
-      dead: listings.filter(l => calculatePerformanceBadge(l) === "dead").length,
-      low_stock: listings.filter(l => calculatePerformanceBadge(l) === "low_stock").length,
-      out_of_stock: listings.filter(l => calculatePerformanceBadge(l) === "out_of_stock").length,
+      all: listingCounts.all ?? totalListings,
+      active: listingCounts.active ?? 0,
+      inactive: listingCounts.inactive ?? 0,
+      draft: listingCounts.draft ?? 0,
+      winners: listingCounts.winners ?? 0,
+      trending: listingCounts.trending ?? 0,
+      profitable: listingCounts.profitable ?? 0,
+      declining: listingCounts.declining ?? 0,
+      dead: listingCounts.dead ?? 0,
+      low_stock: listingCounts.low_stock ?? 0,
+      out_of_stock: listingCounts.out_of_stock ?? 0,
     };
     return counts;
-  }, [listings, calculatePerformanceBadge]);
+  }, [listingCounts, totalListings]);
 
   // Filters logic
   const filteredListings = useMemo(() => {
@@ -135,12 +148,9 @@ export default function ListingsPage() {
   }, [listings, searchQuery, selectedFilter, calculatePerformanceBadge]);
 
   // Paginated Listings
-  const paginatedListings = useMemo(() => {
-    const startIdx = (currentPage - 1) * itemsPerPage;
-    return filteredListings.slice(startIdx, startIdx + itemsPerPage);
-  }, [filteredListings, currentPage]);
+  const paginatedListings = filteredListings;
 
-  const totalPages = Math.ceil(filteredListings.length / itemsPerPage);
+  const totalPages = Math.max(1, Math.ceil(totalListings / itemsPerPage));
 
   const handleSelectAll = () => {
     if (selectedListings.length === filteredListings.length) {
@@ -174,9 +184,8 @@ export default function ListingsPage() {
     if (!editingListing) return;
     setIsGeneratingCopy(true);
     try {
-      const response = await fetch("/api/ai/create-listing-draft", {
+      const response = await sellerplusApiFetch("/api/ai/create-listing-draft", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           productName: editingListing.title,
           existingListingId: editingListing.id,
@@ -202,9 +211,8 @@ export default function ListingsPage() {
     if (!editingListing) return;
     setIsPublishing(true);
     try {
-      const response = await fetch("/api/ai/publish-listing-draft", {
+      const response = await sellerplusApiFetch("/api/ai/publish-listing-draft", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           listingId: editingListing.id,
         })
@@ -213,11 +221,11 @@ export default function ListingsPage() {
       if (!response.ok) {
         throw new Error(data.error || "Failed to publish listing draft");
       }
-      useToastStore.getState().success("Listing Published", "The draft has been snapshot and published successfully!");
+      useToastStore.getState().success("Listing Approved", data.message);
       if (user?.id) loadListings(user.id);
       setEditingListing(null);
     } catch (err: any) {
-      useToastStore.getState().error("Publish Failed", err.message);
+      useToastStore.getState().error("Approval Failed", err.message);
     } finally {
       setIsPublishing(false);
     }
@@ -296,36 +304,36 @@ export default function ListingsPage() {
       l.status, calculatePerformanceBadge(l), l.sales_30d, l.revenue_30d, l.orders_30d, l.seo_score
     ]);
 
-    let csvContent = "data:text/csv;charset=utf-8," 
-      + [headers.join(",")].concat(rows.map(r => r.map(val => {
-        if (typeof val === 'string' && val.includes(',')) {
-          return `"${val.replace(/"/g, '""')}"`;
-        }
-        return val;
-      }).join(","))).join("\n");
-
     const link = document.createElement("a");
-    link.setAttribute("href", encodeURI(csvContent));
+    link.setAttribute("href", "data:text/csv;charset=utf-8," + encodeURIComponent(createCsv(headers, rows)));
     link.setAttribute("download", `listings_${Date.now()}.csv`);
     link.click();
   };
 
   const handleExportExcel = (singleId?: string) => {
-    // Generates a XML workbook payload compatible with Excel
     const targets = singleId ? listings.filter(l => l.id === singleId) : listings.filter(l => selectedListings.includes(l.id));
+    if (targets.length === 0) {
+      useToastStore.getState().warning("No Selection", "Please select one or more listings to export.");
+      return;
+    }
     const headers = [
       "SKU", "ASIN", "Title", "Fulfillment", "Price", "Sale Price", "Stock Available", "Fulfillment Mode", "Badge", "Revenue 30d"
     ];
-    
-    let excelContent = "SKU\tASIN\tTitle\tFulfillment\tPrice\tSale Price\tStock Available\tMode\tBadge\tRevenue\n";
-    targets.forEach(l => {
-      excelContent += `${l.sku}\t${l.asin || ""}\t${l.title.replace(/\n|\t/g, " ")}\t${l.fulfillment_channel}\t${l.price}\t${l.sale_price || ""}\t${l.available_qty}\t${l.fulfillment_channel}\t${calculatePerformanceBadge(l)}\t${l.revenue_30d}\n`;
-    });
-
+    const rows = targets.map(l => [
+      l.sku, l.asin || "", l.title, l.fulfillment_channel, l.price, l.sale_price,
+      l.available_qty, l.fulfillment_channel, calculatePerformanceBadge(l), l.revenue_30d,
+    ]);
+    const workbook = createXlsx(headers, rows, "SellerPlus Listings");
+    const workbookBuffer = new ArrayBuffer(workbook.byteLength);
+    new Uint8Array(workbookBuffer).set(workbook);
+    const url = URL.createObjectURL(new Blob([workbookBuffer], {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    }));
     const link = document.createElement("a");
-    link.setAttribute("href", "data:application/vnd.ms-excel;charset=utf-8," + encodeURIComponent(excelContent));
-    link.setAttribute("download", `listings_${Date.now()}.xls`);
+    link.href = url;
+    link.download = `listings_${Date.now()}.xlsx`;
     link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
   };
 
   const handleExportPDF = (singleId?: string) => {
@@ -338,7 +346,8 @@ export default function ListingsPage() {
     const printWindow = window.open("", "_blank");
     if (!printWindow) return;
 
-    let html = `
+    const safe = escapeHtml;
+    const html = `
       <html>
         <head>
           <title>SellerPlus Listings Report</title>
@@ -372,8 +381,8 @@ export default function ListingsPage() {
             <h2>Table of Contents</h2>
             ${targets.map((t, idx) => `
               <div class="toc-item">
-                <span>Section ${idx + 1}: SKU ${t.sku} (${t.title.substring(0, 40)}...)</span>
-                <span>ASIN: ${t.asin || "N/A"}</span>
+                <span>Section ${idx + 1}: SKU ${safe(t.sku)} (${safe(t.title.substring(0, 40))}...)</span>
+                <span>ASIN: ${safe(t.asin || "N/A")}</span>
               </div>
             `).join("")}
           </div>
@@ -382,12 +391,12 @@ export default function ListingsPage() {
             <div class="listing-card">
               <div class="header-row">
                 <div>
-                  <div class="title">${idx + 1}. ${t.title}</div>
-                  <div class="meta">ASIN: ${t.asin || "N/A"} | SKU: ${t.sku} | FNSKU: ${t.fnsku || "N/A"} | Brand: ${t.brand || "N/A"}</div>
+                  <div class="title">${idx + 1}. ${safe(t.title)}</div>
+                  <div class="meta">ASIN: ${safe(t.asin || "N/A")} | SKU: ${safe(t.sku)} | FNSKU: ${safe(t.fnsku || "N/A")} | Brand: ${safe(t.brand || "N/A")}</div>
                 </div>
                 <div>
-                  <span class="badge ${calculatePerformanceBadge(t) || 'no-data'}">${calculatePerformanceBadge(t) || 'N/A'}</span>
-                  <span class="badge" style="background:#f1f5f9;color:#334155;margin-left:4px;">${t.status.toUpperCase()}</span>
+                  <span class="badge ${safe(calculatePerformanceBadge(t) || 'no-data')}">${safe(calculatePerformanceBadge(t) || 'N/A')}</span>
+                  <span class="badge" style="background:#f1f5f9;color:#334155;margin-left:4px;">${safe(t.status.toUpperCase())}</span>
                 </div>
               </div>
 
@@ -403,23 +412,23 @@ export default function ListingsPage() {
                 <div>
                   <strong>Inventory & Attributes:</strong><br/>
                   Available Quantity: <span>${t.available_qty} units</span><br/>
-                  Fulfillment Mode: <span>${t.fulfillment_channel}</span><br/>
-                  Color / Size: <span>${t.color || "N/A"} / ${t.size || "N/A"}</span><br/>
-                  Dimensions: <span>${t.dimensions || "N/A"}</span><br/>
+                  Fulfillment Mode: <span>${safe(t.fulfillment_channel)}</span><br/>
+                  Color / Size: <span>${safe(t.color || "N/A")} / ${safe(t.size || "N/A")}</span><br/>
+                  Dimensions: <span>${safe(t.dimensions || "N/A")}</span><br/>
                   SEO Score: <span>${t.seo_score !== null && t.seo_score !== undefined ? t.seo_score + '/100' : 'N/A'}</span>
                 </div>
               </div>
 
               <div>
                 <strong>Description Preview:</strong>
-                <p style="font-size: 11px; color:#475569; margin: 4px 0 0 0;">${t.description || "No description provided."}</p>
+                <p style="font-size: 11px; color:#475569; margin: 4px 0 0 0;">${safe(t.description || "No description provided.")}</p>
               </div>
 
               ${t.bullet_points && t.bullet_points.length > 0 ? `
                 <div class="bullets-box">
                   <strong>Key Product Features (Bullet Points):</strong>
                   <ul>
-                    ${t.bullet_points.map(bullet => `<li>${bullet}</li>`).join("")}
+                    ${t.bullet_points.map(bullet => `<li>${safe(bullet)}</li>`).join("")}
                   </ul>
                 </div>
               ` : ""}
@@ -430,17 +439,13 @@ export default function ListingsPage() {
             Generated via SellerPlus Master Catalog | Date: ${new Date().toLocaleString()} | Page 1 of 1
           </div>
 
-          <script>
-            window.onload = function() {
-              window.print();
-            }
-          </script>
         </body>
       </html>
     `;
 
     printWindow.document.write(html);
     printWindow.document.close();
+    printWindow.addEventListener("load", () => printWindow.print(), { once: true });
   };
 
   return (
@@ -879,7 +884,7 @@ export default function ListingsPage() {
       {totalPages > 1 && (
         <div className="flex items-center justify-between border-t border-white/5 pt-4">
           <span className="text-xs text-zinc-500">
-            Showing page {currentPage} of {totalPages} ({filteredListings.length} total items)
+            Showing page {currentPage} of {totalPages} ({totalListings} matching items)
           </span>
           <div className="flex items-center gap-1">
             <button
@@ -1325,11 +1330,11 @@ export default function ListingsPage() {
                         >
                           {isPublishing ? (
                             <>
-                              <Loader2 className="w-3.5 h-3.5 animate-spin" /> Publishing...
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" /> Approving...
                             </>
                           ) : (
                             <>
-                              <CheckCircle className="w-3.5 h-3.5" /> Publish Draft
+                              <CheckCircle className="w-3.5 h-3.5" /> Approve for Publish
                             </>
                           )}
                         </button>

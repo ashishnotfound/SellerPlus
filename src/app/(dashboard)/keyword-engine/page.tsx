@@ -1,15 +1,15 @@
 "use client";
 
 import React, { useState, useMemo, useCallback } from "react";
-import { useAuth } from "@/hooks/use-auth";
 import { useToastStore } from "@/hooks/use-toast-store";
 import { GlassCard } from "@/components/glass-card";
 import {
   generateKeywords,
   generateKeywordsFromAsin,
   KeywordResult,
-} from "@/lib/ai";
+} from "@/lib/ai/client";
 import { cn } from "@/lib/utils";
+import { createCsv } from "@/lib/csv";
 import { useSubscription } from "@/hooks/use-subscription";
 import {
   Copy,
@@ -31,7 +31,7 @@ import {
 } from "lucide-react";
 
 type KeywordTab = "all" | "primary" | "long-tail" | "backend" | "hidden-opportunity";
-type SortKey = "opportunityScore" | "searchVolume" | "difficulty" | "bidMin";
+type SortKey = "keyword" | "opportunityScore" | "searchVolume" | "difficulty" | "bidMin";
 
 export default function KeywordEnginePage() {
   // Existing state
@@ -45,7 +45,7 @@ export default function KeywordEnginePage() {
 
   // NEW: Cluster view toggle
   const [clusterView, setClusterView] = useState(false);
-  const [sortKey, setSortKey] = useState<SortKey>("opportunityScore");
+  const [sortKey, setSortKey] = useState<SortKey>("keyword");
 
   const [loading, setLoading] = useState(false);
   const [keywords, setKeywords] = useState<KeywordResult[] | null>(null);
@@ -99,8 +99,9 @@ export default function KeywordEnginePage() {
 
     // Sort by selected key
     return [...list].sort((a, b) => {
-      const aVal = (a as any)[sortKey] ?? 0;
-      const bVal = (b as any)[sortKey] ?? 0;
+      if (sortKey === "keyword") return a.keyword.localeCompare(b.keyword);
+      const aVal = a[sortKey] ?? Number.NEGATIVE_INFINITY;
+      const bVal = b[sortKey] ?? Number.NEGATIVE_INFINITY;
       return sortKey === "difficulty" ? aVal - bVal : bVal - aVal;
     });
   }, [keywords, activeTab, sortKey]);
@@ -126,11 +127,13 @@ export default function KeywordEnginePage() {
 
   const handleExportCSV = () => {
     if (!keywords) return;
-    const headers = "Keyword,Type,Cluster,Search Volume,Difficulty,Opportunity Score,Bid Min,Bid Max,Intent,Potential,Competitor Usage,Placement,Trend";
-    const rows = keywords.map(k =>
-      `"${k.keyword}","${k.type}","${k.cluster || ""}",${k.searchVolume},${k.difficulty},${k.opportunityScore ?? ""},${k.bidMin ?? ""},${k.bidMax ?? ""},"${k.intent}","${k.rankingPotential}","${k.competitorUsage || ""}","${k.suggestedPlacement || ""}","${k.trend || ""}"`
-    );
-    const csv = [headers, ...rows].join("\n");
+    const headers = "Keyword,Type,Cluster,Search Volume,Difficulty,Opportunity Score,Bid Min,Bid Max,Intent,Potential,Competitor Usage,Placement,Trend,Data Source";
+    const rows = keywords.map(k => [
+      k.keyword, k.type, k.cluster || "", k.searchVolume, k.difficulty,
+      k.opportunityScore, k.bidMin, k.bidMax, k.intent, k.rankingPotential,
+      k.competitorUsage, k.suggestedPlacement, k.trend, k.dataSource,
+    ]);
+    const csv = createCsv(headers.split(","), rows);
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -149,10 +152,10 @@ export default function KeywordEnginePage() {
 
   const tabConfig: { id: KeywordTab; label: string; count: number }[] = [
     { id: "all", label: "All", count: keywords?.length || 0 },
-    { id: "primary", label: "High Volume", count: keywords?.filter(k => k.type === "primary" || k.type === "secondary").length || 0 },
+    { id: "primary", label: "Primary", count: keywords?.filter(k => k.type === "primary" || k.type === "secondary").length || 0 },
     { id: "long-tail", label: "Long Tail", count: keywords?.filter(k => k.type === "long-tail").length || 0 },
     { id: "backend", label: "Backend", count: keywords?.filter(k => k.type === "backend").length || 0 },
-    { id: "hidden-opportunity", label: "Hidden Gems", count: keywords?.filter(k => k.type === "hidden-opportunity").length || 0 },
+    { id: "hidden-opportunity", label: "Validate", count: keywords?.filter(k => k.type === "hidden-opportunity").length || 0 },
   ];
 
   const getTypeColor = (type: string) => {
@@ -194,8 +197,8 @@ export default function KeywordEnginePage() {
     );
   };
 
-  const OpportunityBar = ({ score }: { score?: number }) => {
-    if (score === undefined) return <span className="text-zinc-600 text-[10px]">—</span>;
+  const OpportunityBar = ({ score }: { score?: number | null }) => {
+    if (score == null) return <span className="text-zinc-600 text-[10px]">N/A</span>;
     const color = score >= 70 ? "bg-[#00c48c]" : score >= 40 ? "bg-amber-400" : "bg-rose-400";
     return (
       <div className="flex items-center gap-1.5">
@@ -256,15 +259,19 @@ export default function KeywordEnginePage() {
               </td>
               <td className="font-mono text-zinc-300 pr-3">{kw.searchVolume !== null && kw.searchVolume !== undefined ? kw.searchVolume.toLocaleString("en-IN") : "N/A"}</td>
               <td className="pr-3">
-                <div className="flex items-center gap-1.5">
-                  <div className="w-10 h-1.5 rounded-full bg-white/[0.05] overflow-hidden">
-                    <div
-                      className={`h-full ${kw.difficulty > 60 ? "bg-rose-500" : kw.difficulty > 30 ? "bg-amber-500" : "bg-[#00c48c]"}`}
-                      style={{ width: `${kw.difficulty}%` }}
-                    />
+                {kw.difficulty == null ? (
+                  <span className="text-[10px] text-zinc-600">N/A</span>
+                ) : (
+                  <div className="flex items-center gap-1.5">
+                    <div className="w-10 h-1.5 rounded-full bg-white/[0.05] overflow-hidden">
+                      <div
+                        className={`h-full ${kw.difficulty > 60 ? "bg-rose-500" : kw.difficulty > 30 ? "bg-amber-500" : "bg-[#00c48c]"}`}
+                        style={{ width: `${kw.difficulty}%` }}
+                      />
+                    </div>
+                    <span className="text-[9px] text-zinc-500 font-mono">{kw.difficulty}%</span>
                   </div>
-                  <span className="text-[9px] text-zinc-500 font-mono">{kw.difficulty}%</span>
-                </div>
+                )}
               </td>
               <td className="pr-3"><OpportunityBar score={kw.opportunityScore} /></td>
               <td className="pr-3 text-zinc-400 font-mono text-[10px]">
@@ -429,7 +436,7 @@ export default function KeywordEnginePage() {
                 {loading ? (
                   <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Extracting Keywords...</>
                 ) : (
-                  <><Sparkles className="w-3.5 h-3.5" /> {reverseAsinMode ? "Extract ASIN Keywords" : "Generate Keyword Map"}</>
+                  <><Sparkles className="w-3.5 h-3.5" /> {reverseAsinMode ? "Query ASIN Data" : "Generate Keyword Map"}</>
                 )}
               </button>
             </form>
@@ -440,6 +447,7 @@ export default function KeywordEnginePage() {
             <GlassCard>
               <p className="text-[10px] font-bold text-zinc-600 uppercase tracking-wider mb-3">Sort & View</p>
               <div className="flex flex-wrap gap-1.5 mb-3">
+                <SortButton label="Keyword" sk="keyword" />
                 <SortButton label="Opportunity" sk="opportunityScore" />
                 <SortButton label="Volume" sk="searchVolume" />
                 <SortButton label="Difficulty" sk="difficulty" />
@@ -469,8 +477,8 @@ export default function KeywordEnginePage() {
               <h4 className="text-sm font-bold text-white mb-1">Keyword Output Grid</h4>
               <p className="text-xs text-zinc-600 max-w-[260px] leading-relaxed">
                 {reverseAsinMode
-                  ? "Enter a competitor ASIN to extract the keywords they rank for organically."
-                  : "Provide a seed phrase and query the Keyword Engine to isolate optimization targets."}
+                  ? "Reverse-ASIN ranks require Amazon Brand Analytics or a licensed keyword data provider."
+                  : "Provide a seed phrase to generate qualitative keyword candidates for validation."}
               </p>
             </GlassCard>
           )}
@@ -482,7 +490,7 @@ export default function KeywordEnginePage() {
                 {reverseAsinMode ? "Reverse-Engineering ASIN Profile" : "Analyzing Keyword Intelligence"}
               </h4>
               <p className="text-xs text-zinc-500 max-w-[260px] leading-relaxed">
-                Calculating opportunity scores, PPC bids, semantic clusters, and trend signals…
+                Generating and validating a semantic keyword map…
               </p>
             </GlassCard>
           )}
@@ -515,6 +523,10 @@ export default function KeywordEnginePage() {
                     Export CSV
                   </button>
                 </div>
+              </div>
+
+              <div className="rounded-lg border border-amber-400/20 bg-amber-400/[0.05] px-3 py-2 text-[11px] text-amber-200">
+                These terms are AI-inferred candidates. Search volume, CPC, difficulty, rank, and trend remain unavailable until a legitimate keyword data provider is connected.
               </div>
 
               {/* Tabs */}
@@ -552,7 +564,7 @@ export default function KeywordEnginePage() {
                             <span className="text-xs font-semibold text-zinc-200">{kw.keyword}</span>
                             <div className="flex items-center gap-2 text-[9px] text-zinc-600">
                               <span className="font-mono">{kw.searchVolume !== null && kw.searchVolume !== undefined ? kw.searchVolume.toLocaleString() : "N/A"}</span>
-                              {kw.opportunityScore !== undefined && (
+                              {kw.opportunityScore != null && (
                                 <span className={kw.opportunityScore >= 70 ? "text-[#00c48c]" : kw.opportunityScore >= 40 ? "text-amber-400" : "text-rose-400"}>
                                   ⚡{kw.opportunityScore}
                                 </span>

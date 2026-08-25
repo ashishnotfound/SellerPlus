@@ -50,16 +50,30 @@ export type ExplainableRecommendation = z.infer<typeof ExplainableRecommendation
 
 // ─── Dashboard Widget Schemas ───────────────────────────────────────────────
 
-const WidgetTypeSchema = z.enum(["LineChart", "BarChart", "PieChart", "KPI", "Table", "Alert", "Forecast"]);
-
-const WidgetSchema = z.object({
+const WidgetBaseSchema = z.object({
   id: z.string(),
-  type: WidgetTypeSchema,
   title: z.string(),
-  description: z.string().describe("AI generated description of what this widget means"),
+  description: z.string(),
   importance: z.enum(["High", "Medium", "Low"]).describe("Helps frontend prioritize rendering order"),
-  dataset: z.any().describe("Raw structured data payload for the widget (No styling info allowed)")
 });
+
+const KPIWidgetSchema = WidgetBaseSchema.extend({
+  type: z.literal("KPI"),
+  dataset: z.object({
+    value: z.number().finite().nullable(),
+    format: z.enum(["currency", "number", "percent", "ratio"]),
+    available: z.boolean(),
+    source: z.string().min(1),
+    asOf: z.string().datetime().nullable(),
+  }).strict(),
+}).strict();
+
+const SeriesWidgetSchema = WidgetBaseSchema.extend({
+  type: z.enum(["LineChart", "BarChart"]),
+  dataset: z.array(z.object({ label: z.string(), value: z.number().finite() }).strict()).max(366),
+}).strict();
+
+const WidgetSchema = z.discriminatedUnion("type", [KPIWidgetSchema, SeriesWidgetSchema]);
 
 export type Widget = z.infer<typeof WidgetSchema>;
 
@@ -70,25 +84,31 @@ export const BIResponseSchema = z.object({
   summary: z.string().describe("A concise natural language summary of the overall business context"),
   widgets: z.array(WidgetSchema),
   recommendations: z.array(ExplainableRecommendationSchema)
-});
+}).strict();
 
 export type BIResponse = z.infer<typeof BIResponseSchema>;
 
 // ─── Business Health Schema ──────────────────────────────────────────────────
 
 export const BusinessHealthResponseSchema = z.object({
-  score: z.number().min(0).max(100).describe("Overall business health score (0-100)"),
-  trend: z.enum(["Improving", "Stable", "Declining"]).describe("Direction of the health score"),
+  available: z.boolean(),
+  score: z.number().min(0).max(100).nullable().describe("Deterministic overall business health score when sufficient components are available"),
+  trend: z.enum(["Improving", "Stable", "Declining", "Unavailable"]),
   components: z.object({
-    revenue: z.number().min(0).max(100).describe("Revenue component score"),
-    profitability: z.number().min(0).max(100).describe("Profitability component score"),
-    advertising: z.number().min(0).max(100).describe("Advertising efficiency component score"),
-    inventory: z.number().min(0).max(100).describe("Inventory health component score"),
-    goals: z.number().min(0).max(100).describe("Goal progress component score"),
+    revenue: z.number().min(0).max(100).nullable(),
+    profitability: z.number().min(0).max(100).nullable(),
+    advertising: z.number().min(0).max(100).nullable(),
+    inventory: z.number().min(0).max(100).nullable(),
+    goals: z.number().min(0).max(100).nullable(),
   }),
-  strengths: z.array(z.string()).describe("List of business strengths"),
-  weaknesses: z.array(z.string()).describe("List of business weaknesses/risks"),
-  recommendations: z.array(ExplainableRecommendationSchema)
+  dataCompleteness: z.number().min(0).max(100),
+  methodology: z.literal("deterministic_health_v1"),
+  dataWindow: z.object({ since: z.string().datetime({ offset: true }), until: z.string().datetime({ offset: true }) }),
+  dataSources: z.array(z.string()),
+  strengths: z.array(z.string()),
+  weaknesses: z.array(z.string()),
+  limitations: z.array(z.string()),
+  recommendations: z.array(ExplainableRecommendationSchema),
 });
 
 export type BusinessHealthResponse = z.infer<typeof BusinessHealthResponseSchema>;
@@ -96,21 +116,31 @@ export type BusinessHealthResponse = z.infer<typeof BusinessHealthResponseSchema
 // ─── Radar Schemas ───────────────────────────────────────────────────────────
 
 export const RadarItemSchema = z.object({
-  id: z.string(),
-  title: z.string(),
-  description: z.string(),
+  id: z.string().min(1),
+  title: z.string().min(1),
+  description: z.string().min(1),
   severityOrImpact: z.enum(["Critical", "High", "Medium", "Low"]).describe("Severity for risks, Impact for opportunities"),
   confidence: z.number().min(0).max(100),
-  evidence: z.array(z.string()),
-  expectedImpactValue: z.string().optional().describe("E.g., '-₹10,000' or '+15% Sales'"),
+  confidenceReason: z.string().min(1),
+  evidence: z.array(z.string().min(1)).min(1),
+  dataSources: z.array(z.string().min(1)).min(1),
+  expectedImpactValue: z.string().min(1).optional(),
   recommendedAction: ExplainableRecommendationSchema.optional()
-});
+}).strict();
 
 export type RadarItem = z.infer<typeof RadarItemSchema>;
 
 export const RadarResponseSchema = z.object({
-  items: z.array(RadarItemSchema)
-});
+  kind: z.enum(["risk", "opportunity"]),
+  methodology: z.literal("deterministic_evidence_v1"),
+  dataWindow: z.object({
+    since: z.string().datetime({ offset: true }),
+    until: z.string().datetime({ offset: true }),
+  }).strict(),
+  dataSources: z.array(z.string().min(1)),
+  limitations: z.array(z.string().min(1)),
+  items: z.array(RadarItemSchema),
+}).strict();
 
 export type RadarResponse = z.infer<typeof RadarResponseSchema>;
 
@@ -121,37 +151,52 @@ export const DailyBriefingSchema = z.object({
   greeting: z.string(),
   yesterdaySummary: z.object({
     revenue: z.number(),
-    profit: z.number(),
+    profit: z.number().nullable(),
     orders: z.number(),
-    topProduct: z.string(),
+    topProduct: z.string().nullable(),
     worstProduct: z.string().optional(),
   }),
   advertisingSummary: z.string(),
   inventoryAlerts: z.array(z.string()),
   workerSummary: z.string().optional(),
-  businessHealthScore: z.number(),
+  businessHealthScore: z.number().nullable(),
   goalProgress: z.string(),
   todaysMission: z.string(),
   recommendedActions: z.array(ExplainableRecommendationSchema),
-  confidence: z.number().min(0).max(100)
+  confidence: z.number().min(0).max(100),
+  dataWindow: z.object({ since: z.string().datetime(), until: z.string().datetime(), timezone: z.literal("UTC") }),
+  dataSources: z.array(z.string()),
 });
 
 export type DailyBriefing = z.infer<typeof DailyBriefingSchema>;
 
 // ─── Business Simulator Schema ───────────────────────────────────────────────
 
+const SimulatorImpactSchema = z.object({
+  minimum: z.number().finite().nullable(),
+  maximum: z.number().finite().nullable(),
+  currency: z.literal("INR"),
+  period: z.literal("30_days"),
+  source: z.enum(["calculated", "modelled_estimate", "unavailable"]),
+  basis: z.string().min(1),
+});
+
 export const SimulatorResponseSchema = z.object({
-  scenarioName: z.string(),
-  expectedRevenueImpact: z.number().describe("Expected change in monthly revenue"),
-  expectedProfitImpact: z.number().describe("Expected change in monthly profit"),
-  expectedAdvertisingImpact: z.number().describe("Expected change in advertising spend/efficiency"),
-  inventoryImpact: z.string().describe("How this affects inventory levels/needs"),
-  cashFlowImpact: z.string(),
+  scenarioName: z.string().min(1),
+  methodology: z.literal("deterministic_assumption_model"),
+  supported: z.boolean(),
+  revenueImpact: SimulatorImpactSchema,
+  profitImpact: SimulatorImpactSchema,
+  advertisingImpact: SimulatorImpactSchema,
+  inventoryImpact: z.string().min(1),
+  cashFlowImpact: z.string().min(1),
   riskLevel: z.enum(["Critical", "High", "Medium", "Low"]),
   confidence: z.number().min(0).max(100),
-  timelineDays: z.number().describe("Expected days to see the result"),
-  assumptions: z.array(z.string()).describe("List of assumptions made by the simulator")
+  timelineDays: z.object({ minimum: z.number().int().nonnegative().nullable(), maximum: z.number().int().nonnegative().nullable() }),
+  assumptions: z.array(z.string()),
+  limitations: z.array(z.string()),
+  dataWindow: z.object({ start: z.string().datetime(), end: z.string().datetime(), days: z.number().int().positive() }),
+  dataSources: z.array(z.enum(["Amazon SP-API", "Amazon Ads API", "seller-entered COGS", "calculated"])),
 });
 
 export type SimulatorResponse = z.infer<typeof SimulatorResponseSchema>;
-

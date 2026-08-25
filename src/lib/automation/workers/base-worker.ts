@@ -1,9 +1,10 @@
 export interface JobPayload {
   id: string;
   user_id?: string;
+  workspace_id: string;
   event_type: string;
   version: string;
-  payload: any;
+  payload: unknown;
   correlation_id: string;
   causation_id?: string;
 }

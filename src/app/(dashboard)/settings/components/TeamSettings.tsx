@@ -1,189 +1,135 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import { FormEvent, useCallback, useEffect, useState } from "react";
+import { Loader2, Trash2, UserPlus, Users } from "lucide-react";
 import { GlassCard } from "@/components/glass-card";
-import { useAuth } from "@/hooks/use-auth";
-import { Users, UserPlus, ShieldAlert, Trash2 } from "lucide-react";
-import { supabase } from "@/lib/supabase";
 import { useToastStore } from "@/hooks/use-toast-store";
+import { sellerplusApiFetch } from "@/lib/client/api-fetch";
+import { useAuth } from "@/hooks/use-auth";
+
+interface TeamMember {
+  id: string;
+  role: string;
+  user_id: string;
+  created_at: string;
+  profiles: { email: string | null; full_name: string | null } | null;
+}
 
 export function TeamSettings() {
-  const user = useAuth((s) => s.user);
-  const [members, setMembers] = useState<any[]>([]);
-  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
-  
-  const [inviteEmail, setInviteEmail] = useState("");
-  const [inviteRole, setInviteRole] = useState("member");
-  const [myRole, setMyRole] = useState("viewer");
+  const workspaceId = useAuth((state) => state.user?.workspaceId);
+  const [members, setMembers] = useState<TeamMember[]>([]);
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState("member");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    async function fetchTeam() {
-      if (!user?.id) return;
-      
-      // Get the workspace the user belongs to (optimistically take the first one)
-      const { data: wData } = await supabase
-        .from("workspace_members")
-        .select("workspace_id, role")
-        .eq("user_id", user.id)
-        .limit(1)
-        .maybeSingle();
-
-      if (wData) {
-        setActiveWorkspaceId(wData.workspace_id);
-        setMyRole(wData.role);
-        
-        // Fetch all members for this workspace
-        const { data: mData } = await supabase
-          .from("workspace_members")
-          .select("id, role, user_id, created_at, profiles(email, full_name)")
-          .eq("workspace_id", wData.workspace_id);
-          
-        if (mData) {
-          setMembers(mData);
-        }
-      }
-    }
-    
-    fetchTeam();
-  }, [user]);
-
-  const handleInvite = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!activeWorkspaceId) return;
-    if (myRole !== "owner" && myRole !== "admin") {
-      useToastStore.getState().error("Access Denied", "Only Owners or Admins can invite new members.");
-      return;
-    }
-
+  const load = useCallback(async () => {
+    setLoading(true);
     try {
-      // 1. Try to find the user by email in profiles
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("id")
-        .eq("email", inviteEmail)
-        .maybeSingle();
-        
-      let targetUserId = profile?.id;
-      
-      // If user doesn't exist, we ideally send an invite email. 
-      // For this demo, we'll error out if the user doesn't exist, OR we can mock it.
-      if (!targetUserId) {
-        useToastStore.getState().error("Invite Failed", "Optimistic provisioning requires the user to sign up first before being added.");
-        return;
-      }
-
-      // Add to workspace
-      const { error } = await supabase
-        .from("workspace_members")
-        .insert({
-          workspace_id: activeWorkspaceId,
-          user_id: targetUserId,
-          role: inviteRole
-        });
-        
-      if (error) {
-        if (error.code === '23505') {
-          useToastStore.getState().error("Duplicate", "User is already in this workspace.");
-        } else {
-          throw error;
-        }
-      } else {
-        useToastStore.getState().success("Success", `Added ${inviteEmail} to the team.`);
-        setInviteEmail("");
-        // Reload
-        const { data: mData } = await supabase
-          .from("workspace_members")
-          .select("id, role, user_id, created_at, profiles(email, full_name)")
-          .eq("workspace_id", activeWorkspaceId);
-        if (mData) setMembers(mData);
-      }
-    } catch (err: any) {
-      useToastStore.getState().error("Error", err.message);
+      const response = await sellerplusApiFetch("/api/settings/team");
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error ?? "Team members could not be loaded.");
+      setMembers(payload.data ?? []);
+    } catch (error) {
+      useToastStore.getState().error("Team unavailable", error instanceof Error ? error.message : "Try again later.");
+    } finally {
+      setLoading(false);
     }
-  };
+  }, [workspaceId]);
 
-  const handleRemove = async (memberId: string) => {
-    if (myRole !== "owner" && myRole !== "admin") return;
-    
+  useEffect(() => { void load(); }, [load]);
+
+  async function addMember(event: FormEvent) {
+    event.preventDefault();
+    setSaving(true);
     try {
-      const { error } = await supabase
-        .from("workspace_members")
-        .delete()
-        .eq("id", memberId);
-        
-      if (error) throw error;
-      useToastStore.getState().success("Removed", "Member removed from workspace.");
-      setMembers(members.filter(m => m.id !== memberId));
-    } catch (err: any) {
-      useToastStore.getState().error("Error", err.message);
+      const response = await sellerplusApiFetch("/api/settings/team", {
+        method: "POST",
+        body: JSON.stringify({ email, role }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error ?? "Member could not be added.");
+      setEmail("");
+      await load();
+      useToastStore.getState().success("Member added", "Workspace access was granted.");
+    } catch (error) {
+      useToastStore.getState().error("Member not added", error instanceof Error ? error.message : "Try again later.");
+    } finally {
+      setSaving(false);
     }
-  };
+  }
+
+  async function removeMember(membershipId: string) {
+    setSaving(true);
+    try {
+      const response = await sellerplusApiFetch("/api/settings/team", {
+        method: "DELETE",
+        body: JSON.stringify({ membershipId }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error ?? "Member could not be removed.");
+      setMembers((current) => current.filter((member) => member.id !== membershipId));
+      useToastStore.getState().success("Member removed", "Workspace access was revoked.");
+    } catch (error) {
+      useToastStore.getState().error("Member not removed", error instanceof Error ? error.message : "Try again later.");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <GlassCard>
-      <div className="flex items-center gap-2.5 mb-6">
-        <Users className="w-5 h-5 text-indigo-400" />
-        <h3 className="text-lg font-bold text-white">Team Management</h3>
+      <div className="mb-6 flex items-center gap-2.5">
+        <Users className="h-5 w-5 text-indigo-400" />
+        <h3 className="text-lg font-bold text-white">Team management</h3>
       </div>
 
-      <div className="mb-6 bg-black/20 p-4 rounded-xl border border-white/5">
-        <h4 className="text-sm font-semibold text-white mb-4">Current Members</h4>
-        <div className="flex flex-col gap-3">
-          {members.map(member => (
-            <div key={member.id} className="flex items-center justify-between py-2 border-b border-white/5 last:border-0">
-              <div>
-                <p className="text-sm text-white font-medium">{member.profiles?.full_name || "Unknown User"}</p>
-                <p className="text-xs text-zinc-400">{member.profiles?.email}</p>
+      <div className="mb-6 rounded-xl border border-white/[0.06] bg-black/20 p-4">
+        <h4 className="mb-4 text-sm font-semibold text-white">Current members</h4>
+        {loading ? (
+          <div className="flex h-20 items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-zinc-500" /></div>
+        ) : members.length === 0 ? (
+          <p className="text-xs text-zinc-500">No team members were returned.</p>
+        ) : (
+          <div className="divide-y divide-white/[0.05]">
+            {members.map((member) => (
+              <div key={member.id} className="flex items-center justify-between gap-4 py-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium text-white">{member.profiles?.full_name || member.profiles?.email || "SellerPlus user"}</p>
+                  <p className="truncate text-xs text-zinc-500">{member.profiles?.email}</p>
+                </div>
+                <div className="flex shrink-0 items-center gap-3">
+                  <span className="rounded bg-white/10 px-2 py-1 text-[10px] font-bold uppercase text-zinc-400">{member.role.replaceAll("_", " ")}</span>
+                  {member.role !== "owner" && (
+                    <button type="button" disabled={saving} onClick={() => void removeMember(member.id)} className="rounded-lg p-1.5 text-rose-400 hover:bg-rose-500/20 disabled:opacity-50" aria-label="Remove member">
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
               </div>
-              <div className="flex items-center gap-3">
-                <span className={`px-2 py-1 text-[10px] uppercase font-bold rounded bg-white/10 ${member.role === 'owner' ? 'text-indigo-400' : 'text-zinc-400'}`}>
-                  {member.role}
-                </span>
-                {(myRole === "owner" || myRole === "admin") && member.role !== "owner" && (
-                  <button onClick={() => handleRemove(member.id)} className="p-1.5 text-rose-400 hover:bg-rose-500/20 rounded-lg transition-colors">
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                )}
-              </div>
-            </div>
-          ))}
-          {members.length === 0 && <p className="text-xs text-zinc-500">No members found.</p>}
-        </div>
+            ))}
+          </div>
+        )}
       </div>
 
-      {(myRole === "owner" || myRole === "admin") && (
-        <form onSubmit={handleInvite} className="flex items-end gap-3">
-          <div className="flex-1 flex flex-col gap-1.5">
-            <label className="text-xs font-semibold text-zinc-400">Invite by Email</label>
-            <input
-              type="email"
-              required
-              value={inviteEmail}
-              onChange={(e) => setInviteEmail(e.target.value)}
-              placeholder="colleague@sellerplus.in"
-              className="w-full h-11 px-4 rounded-xl border border-white/10 bg-white/[0.02] text-white text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 transition-all"
-            />
-          </div>
-          <div className="w-32 flex flex-col gap-1.5">
-            <label className="text-xs font-semibold text-zinc-400">Role</label>
-            <select
-              value={inviteRole}
-              onChange={(e) => setInviteRole(e.target.value)}
-              className="w-full h-11 px-3 rounded-xl border border-white/10 bg-[#12121A] text-white text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 transition-all"
-            >
-              <option value="admin">Admin</option>
-              <option value="member">Member</option>
-              <option value="viewer">Viewer</option>
-            </select>
-          </div>
-          <button
-            type="submit"
-            className="h-11 px-4 rounded-xl bg-indigo-500 hover:bg-indigo-600 text-white font-bold text-xs flex items-center gap-2 transition-all"
-          >
-            <UserPlus className="w-4 h-4" /> Add
-          </button>
-        </form>
-      )}
+      <form onSubmit={addMember} className="grid items-end gap-3 md:grid-cols-[1fr_180px_auto]">
+        <label className="flex flex-col gap-1.5">
+          <span className="text-xs font-semibold text-zinc-400">Existing SellerPlus user email</span>
+          <input type="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="colleague@example.com" className="h-11 rounded-xl border border-white/10 bg-white/[0.02] px-4 text-sm text-white focus:border-indigo-500 focus:outline-none" />
+        </label>
+        <label className="flex flex-col gap-1.5">
+          <span className="text-xs font-semibold text-zinc-400">Role</span>
+          <select value={role} onChange={(event) => setRole(event.target.value)} className="h-11 rounded-xl border border-white/10 bg-[#12121A] px-3 text-sm text-white focus:border-indigo-500 focus:outline-none">
+            <option value="admin">Admin</option><option value="member">Member</option><option value="viewer">Viewer</option>
+            <option value="ppc_manager">PPC Manager</option><option value="catalog_manager">Catalog Manager</option>
+            <option value="operations">Operations</option><option value="finance">Finance</option>
+          </select>
+        </label>
+        <button type="submit" disabled={saving} className="flex h-11 items-center justify-center gap-2 rounded-xl bg-indigo-500 px-4 text-xs font-bold text-white hover:bg-indigo-600 disabled:opacity-50">
+          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserPlus className="h-4 w-4" />} Add member
+        </button>
+      </form>
+      <p className="mt-3 text-[11px] text-zinc-600">Email invitation delivery is intentionally unavailable until a verified transactional-email flow is configured.</p>
     </GlassCard>
   );
 }

@@ -1,53 +1,67 @@
 import { NextResponse } from "next/server";
-import { authenticateWithDevFallback, authErrorResponse, getAdminClient } from "@/lib/auth-middleware";
-import { log } from "@/lib/logger";
+import { z } from "zod";
+import {
+  authenticate,
+  authErrorResponse,
+  requirePermission,
+} from "@/lib/auth-middleware";
 
-export async function GET(req: Request) {
+const querySchema = z.object({
+  days: z.coerce.number().int().min(1).max(365).default(30),
+});
+
+const summarySchema = z.object({
+  totalCostMicros: z.coerce.number().nonnegative(),
+  totalInputTokens: z.coerce.number().int().nonnegative(),
+  totalOutputTokens: z.coerce.number().int().nonnegative(),
+  totalRequests: z.coerce.number().int().nonnegative(),
+  failedRequests: z.coerce.number().int().nonnegative(),
+  byProvider: z.array(z.object({
+    provider: z.string(),
+    model: z.string(),
+    costMicros: z.coerce.number().nonnegative(),
+    inputTokens: z.coerce.number().int().nonnegative(),
+    outputTokens: z.coerce.number().int().nonnegative(),
+    requests: z.coerce.number().int().nonnegative(),
+  })),
+  byFeature: z.array(z.object({
+    feature: z.string(),
+    costMicros: z.coerce.number().nonnegative(),
+    requests: z.coerce.number().int().nonnegative(),
+  })),
+});
+
+export async function GET(request: Request) {
   try {
-    const user = await authenticateWithDevFallback(req);
+    const actor = await authenticate(request);
+    requirePermission(actor, "finance.read");
+    const url = new URL(request.url);
+    const { days } = querySchema.parse({ days: url.searchParams.get("days") ?? undefined });
+    const since = new Date(Date.now() - days * 86_400_000).toISOString();
 
-    log.info(`[API/Costs] Fetching AI usage costs`, undefined, {
-      userId: user.userId,
+    const { data, error } = await actor.supabaseAdmin.rpc("get_workspace_ai_usage_summary", {
+      p_workspace_id: actor.workspaceId,
+      p_since: since,
     });
-
-    const adminClient = getAdminClient();
-    
-    // In a real app, this would be an aggregation query.
-    // For now, we just fetch logs and aggregate them in code.
-    const { data: logs, error } = await adminClient
-      .from("ai_usage_logs")
-      .select("*")
-      .eq("user_id", user.userId);
-
-    if (error) {
-      throw error;
-    }
-
-    let totalCostUsd = 0;
-    const providerSplit: Record<string, number> = {
-      xAI: 0,
-      Anthropic: 0,
-      OpenAI: 0,
-    };
-
-    logs.forEach(log => {
-      totalCostUsd += Number(log.estimated_cost_usd);
-      if (providerSplit[log.provider] !== undefined) {
-        providerSplit[log.provider] += Number(log.estimated_cost_usd);
-      }
-    });
+    if (error) throw error;
+    const summary = summarySchema.parse(data);
 
     return NextResponse.json({
-      success: true,
       data: {
-        totalCostUsd,
-        providerSplit,
-        totalRequests: logs.length,
-      }
-    });
+        ...summary,
+        totalCostUsd: summary.totalCostMicros / 1_000_000,
+        periodDays: days,
+        source: "recorded_provider_usage",
+      },
+    }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
-    log.error(`[API/Costs] Failed to fetch costs`, (error as Error).message);
-    const { body, status } = authErrorResponse(error);
-    return NextResponse.json(body, { status });
+    if (error instanceof z.ZodError) {
+      return NextResponse.json(
+        { error: "Invalid AI usage request or stored usage record.", code: "VALIDATION_ERROR" },
+        { status: 400 },
+      );
+    }
+    const response = authErrorResponse(error);
+    return NextResponse.json(response.body, { status: response.status });
   }
 }

@@ -3,22 +3,14 @@
 import React, { useMemo } from "react";
 import { GlassCard } from "@/components/glass-card";
 import { useAnalyticsStore, DateRangePreset } from "@/hooks/use-analytics-store";
-import { useConnections } from "@/hooks/use-connections";
 import { useListingsStore } from "@/hooks/use-listings-store";
-import { cn, formatCurrency } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import {
-  TrendingUp,
-  TrendingDown,
-  ArrowRightLeft,
-  Calendar,
   Lock,
   Unlock,
-  Settings,
-  HelpCircle,
   Activity,
   ArrowUpRight,
   ArrowDownRight,
-  Info,
   Package,
 } from "lucide-react";
 import {
@@ -38,7 +30,6 @@ export default function ProfitDashboardPage() {
   const isEditingWidgets = useAnalyticsStore((s) => s.isEditingWidgets);
   const setEditingWidgets = useAnalyticsStore((s) => s.setEditingWidgets);
   const updateWidgetLayout = useAnalyticsStore((s) => s.updateWidgetLayout);
-  const saveWidgetLayout = useAnalyticsStore((s) => s.saveWidgetLayout);
   const resetWidgetLayout = useAnalyticsStore((s) => s.resetWidgetLayout);
   const getSummary = useAnalyticsStore((s) => s.getSummary);
   const getPrevSummary = useAnalyticsStore((s) => s.getPrevSummary);
@@ -46,12 +37,15 @@ export default function ProfitDashboardPage() {
   const getPpcSummary = useAnalyticsStore((s) => s.getPpcSummary);
   const isLoading = useAnalyticsStore((s) => s.loading);
 
-  const amazonConnected = useConnections((s) => s.amazonConnected);
   const listings = useListingsStore((s) => s.listings);
 
   const topProduct = useMemo(() => {
     if (listings.length === 0) return null;
-    return [...listings].sort((a, b) => (b.revenue_30d || 0) - (a.revenue_30d || 0))[0];
+    return [...listings].sort((a, b) => {
+      if (a.revenue_30d === null || a.revenue_30d === undefined) return 1;
+      if (b.revenue_30d === null || b.revenue_30d === undefined) return -1;
+      return b.revenue_30d - a.revenue_30d;
+    })[0];
   }, [listings]);
 
   const lowestStockProduct = useMemo(() => {
@@ -108,7 +102,7 @@ export default function ProfitDashboardPage() {
       case "today_profit":
         return (
           <div className="flex flex-col h-full justify-between">
-            <span className="text-[10px] text-zinc-500 uppercase font-extrabold tracking-wider">Net Profit</span>
+            <span className="text-[10px] text-zinc-500 uppercase font-extrabold tracking-wider">Contribution Profit</span>
             <span className="text-2xl font-black text-emerald-400">{summary.netProfit !== null ? `₹${summary.netProfit.toLocaleString("en-IN")}` : "Not Available"}</span>
             <div className="flex items-center justify-between text-[10px] text-zinc-400 mt-2">
               <span>vs Prev Period</span>
@@ -190,7 +184,7 @@ export default function ProfitDashboardPage() {
                 </div>
                 {lowestStockProduct.available_qty <= 10 && (
                   <div className="text-[9px] text-rose-500 font-black uppercase mt-1 tracking-wider bg-rose-500/10 border border-rose-500/20 px-1.5 py-0.5 rounded block text-center animate-pulse">
-                    Restock suggested
+                    Low stock threshold
                   </div>
                 )}
               </>
@@ -260,7 +254,7 @@ export default function ProfitDashboardPage() {
         <div>
           <h1 className="text-3xl font-extrabold tracking-tight text-white">Profit Dashboard</h1>
           <p className="text-zinc-400 text-sm mt-1">
-            Real-time Profit & Loss breakdown from Amazon SP-API and multi-channel catalogs.
+            Daily financial aggregates with exact UTC date windows. Missing source data remains unavailable.
           </p>
         </div>
 
@@ -273,7 +267,7 @@ export default function ProfitDashboardPage() {
               { key: "last_30d", label: "30 Days" },
               { key: "this_month", label: "This Month" },
               { key: "last_month", label: "Last Month" },
-              { key: "lifetime", label: "Lifetime" },
+              { key: "lifetime", label: "Available History" },
             ] as const).map((range) => (
               <button
                 key={range.key}
@@ -386,10 +380,10 @@ export default function ProfitDashboardPage() {
         <div className="flex justify-between items-start mb-6">
           <div>
             <h3 className="text-lg font-bold text-white">Daily Performance Timeline</h3>
-            <p className="text-xs text-zinc-500">Revenue compared against net operating profit</p>
+            <p className="text-xs text-zinc-500">Revenue with contribution profit shown only when every required source is complete</p>
           </div>
           <span className="text-[10px] uppercase font-bold text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded border border-indigo-500/20">
-            Recharts Analytics Engine
+            Source-qualified daily facts
           </span>
         </div>
 
@@ -421,7 +415,7 @@ export default function ProfitDashboardPage() {
                   itemStyle={{ fontSize: "12px" }}
                 />
                 <Area type="monotone" name="Revenue" dataKey="revenue" stroke="#818cf8" fillOpacity={1} fill="url(#colorRev)" strokeWidth={2} />
-                <Area type="monotone" name="Net Profit" dataKey="netProfit" stroke="#34d399" fillOpacity={1} fill="url(#colorProfit)" strokeWidth={2} />
+                <Area type="monotone" name="Contribution Profit" dataKey="netProfit" stroke="#34d399" fillOpacity={1} fill="url(#colorProfit)" strokeWidth={2} />
               </AreaChart>
             </ResponsiveContainer>
           )}
@@ -432,14 +426,14 @@ export default function ProfitDashboardPage() {
       <GlassCard className="p-6">
         <div className="flex items-center gap-2 mb-6">
           <Activity className="w-5 h-5 text-indigo-400" />
-          <h3 className="text-lg font-bold text-white">Consolidated Profit & Loss Statement</h3>
+          <h3 className="text-lg font-bold text-white">Operating Contribution Statement</h3>
         </div>
 
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs min-w-[600px]">
             <thead>
               <tr className="border-b border-white/5 text-zinc-500 font-semibold h-9 uppercase tracking-wider text-[10px]">
-                <th>Profit & Loss Metric</th>
+                <th>Operating Metric</th>
                 <th className="text-right">Current Period</th>
                 <th className="text-right">Previous Period</th>
                 <th className="text-right">Change (%) / margin gap</th>
@@ -453,7 +447,7 @@ export default function ProfitDashboardPage() {
                 <td className="text-right">{renderTrend(revenueChange)}</td>
               </tr>
               <tr className="h-11">
-                <td>Product Costs (COGS)</td>
+                <td>Seller Cost Profile (COGS, including configured unit costs)</td>
                 <td className="text-right text-rose-300">{summary.cogs !== null ? `-₹${summary.cogs.toLocaleString("en-IN")}` : "N/A"}</td>
                 <td className="text-right text-zinc-600">{prevSummary.cogs !== null ? `-₹${prevSummary.cogs.toLocaleString("en-IN")}` : "N/A"}</td>
                 <td className="text-right">{renderTrend(calculateChange(summary.cogs, prevSummary.cogs))}</td>
@@ -465,19 +459,19 @@ export default function ProfitDashboardPage() {
                 <td className="text-right">{renderTrend(calculateChange(summary.amazonFees, prevSummary.amazonFees))}</td>
               </tr>
               <tr className="h-11">
-                <td>Shipping & Logistic Costs</td>
+                <td>Marketplace Shipping & Logistics Charges</td>
                 <td className="text-right text-rose-300">{summary.shippingCost !== null ? `-₹${summary.shippingCost.toLocaleString("en-IN")}` : "N/A"}</td>
                 <td className="text-right text-zinc-600">{prevSummary.shippingCost !== null ? `-₹${prevSummary.shippingCost.toLocaleString("en-IN")}` : "N/A"}</td>
                 <td className="text-right">{renderTrend(calculateChange(summary.shippingCost, prevSummary.shippingCost))}</td>
               </tr>
               <tr className="h-11">
-                <td>Refund & Return Reimbursement Costs</td>
+                <td>Refund Adjustments</td>
                 <td className="text-right text-rose-300">{summary.refundCosts !== null ? `-₹${summary.refundCosts.toLocaleString("en-IN")}` : "N/A"}</td>
                 <td className="text-right text-zinc-600">{prevSummary.refundCosts !== null ? `-₹${prevSummary.refundCosts.toLocaleString("en-IN")}` : "N/A"}</td>
                 <td className="text-right">{renderTrend(calculateChange(summary.refundCosts, prevSummary.refundCosts))}</td>
               </tr>
               <tr className="h-11 bg-white/[0.01]">
-                <td className="font-bold text-white">Gross Operating Profit</td>
+                <td className="font-bold text-white">Pre-ad Contribution</td>
                 <td className="text-right text-white font-bold">{summary.grossProfit !== null ? `₹${summary.grossProfit.toLocaleString("en-IN")}` : "N/A"}</td>
                 <td className="text-right text-zinc-500">{prevSummary.grossProfit !== null ? `₹${prevSummary.grossProfit.toLocaleString("en-IN")}` : "N/A"}</td>
                 <td className="text-right">{renderTrend(calculateChange(summary.grossProfit, prevSummary.grossProfit))}</td>
@@ -489,13 +483,13 @@ export default function ProfitDashboardPage() {
                 <td className="text-right">{renderTrend(calculateChange(summary.adSpend, prevSummary.adSpend))}</td>
               </tr>
               <tr className="h-11 bg-indigo-500/5 font-bold">
-                <td className="text-indigo-300">Net Operating Profit</td>
+                <td className="text-indigo-300">Contribution Profit</td>
                 <td className="text-right text-emerald-400 text-sm">{summary.netProfit !== null ? `₹${summary.netProfit.toLocaleString("en-IN")}` : "N/A"}</td>
                 <td className="text-right text-zinc-500">{prevSummary.netProfit !== null ? `₹${prevSummary.netProfit.toLocaleString("en-IN")}` : "N/A"}</td>
                 <td className="text-right">{renderTrend(profitChange)}</td>
               </tr>
               <tr className="h-11">
-                <td>Gross Profit Margin (%)</td>
+                <td>Contribution Margin (%)</td>
                 <td className="text-right text-zinc-200">{summary.margin !== null ? `${summary.margin}%` : "N/A"}</td>
                 <td className="text-right text-zinc-600">{prevSummary.margin !== null ? `${prevSummary.margin}%` : "N/A"}</td>
                 <td className="text-right">

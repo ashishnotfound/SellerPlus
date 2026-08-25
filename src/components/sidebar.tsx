@@ -63,7 +63,7 @@ const NAV_ITEMS = [
   { label: "Refunds",         icon: <RotateCcw       className="w-4 h-4" />, href: "/analytics/refunds",                    restrictedRoles: undefined, allowedRoles: ["owner", "admin", "manager", "analyst"] },
   { label: "Reports",         icon: <FileText        className="w-4 h-4" />, href: "/analytics/reports",                    restrictedRoles: undefined, allowedRoles: ["owner", "admin", "manager"] },
   { label: "Alerts",          icon: <AlertTriangle   className="w-4 h-4" />, href: "/analytics/alerts",                    restrictedRoles: undefined, allowedRoles: ["owner", "admin", "manager", "analyst"] },
-  { label: "Automation",      icon: <Cpu             className="w-4 h-4" />, href: "/analytics/automation",                 restrictedRoles: undefined, allowedRoles: ["owner", "admin", "manager"] },
+  { label: "Approvals",       icon: <Cpu             className="w-4 h-4" />, href: "/automations/approvals",                restrictedRoles: undefined, allowedRoles: ["owner", "admin", "manager"] },
   // Operations group — visible to all roles including warehouse
   { label: "Warehouse",       icon: <Warehouse       className="w-4 h-4" />, href: "/warehouse",                           restrictedRoles: undefined, allowedRoles: undefined, group: "Operations" },
   // AI Tools group — restricted from warehouse-only roles

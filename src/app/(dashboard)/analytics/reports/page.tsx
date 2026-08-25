@@ -2,19 +2,53 @@
 
 import React, { useState, useMemo } from "react";
 import { GlassCard } from "@/components/glass-card";
-import { useAnalyticsStore } from "@/hooks/use-analytics-store";
-import { cn, formatCurrency } from "@/lib/utils";
+import {
+  summarizeFinancialLogs,
+  useAnalyticsStore,
+  type FinancialLogEntry,
+} from "@/hooks/use-analytics-store";
+import { cn } from "@/lib/utils";
 import {
   FileText,
   Download,
-  Calendar,
-  Layers,
-  Settings,
   Printer,
-  CheckCircle,
 } from "lucide-react";
 
 type ReportType = "daily" | "weekly" | "monthly";
+
+interface ReportRow {
+  date: string;
+  revenue: number;
+  cogs: number | null;
+  shippingCost: number | null;
+  amazonFees: number | null;
+  adSpend: number | null;
+  refundCosts: number | null;
+  unitsSold: number;
+  ordersCount: number;
+  contributionProfit: number | null;
+}
+
+function reportRow(date: string, logs: FinancialLogEntry[]): ReportRow {
+  const summary = summarizeFinancialLogs(logs);
+  return {
+    date,
+    revenue: summary.revenue ?? 0,
+    cogs: summary.cogs,
+    shippingCost: summary.shippingCost,
+    amazonFees: summary.amazonFees,
+    adSpend: summary.adSpend,
+    refundCosts: summary.refundCosts,
+    unitsSold: summary.unitsSold ?? 0,
+    ordersCount: summary.ordersCount ?? 0,
+    contributionProfit: summary.netProfit,
+  };
+}
+
+function currency(value: number | null, negative = false): string {
+  if (value === null) return "N/A";
+  return `${negative ? "-" : ""}₹${value.toLocaleString("en-IN")}`;
+}
 
 export default function ReportsCenterPage() {
   const financialLogs = useAnalyticsStore((s) => s.financialLogs);
@@ -24,92 +58,49 @@ export default function ReportsCenterPage() {
   const [reportType, setReportType] = useState<ReportType>("monthly");
   const [activeTab, setActiveTab] = useState<"finance" | "products">("finance");
   
-  // Aggregate report data based on type (daily, weekly, monthly)
-  const reportRows = useMemo(() => {
-    let raw = [...financialLogs];
-    
+  const reportRows = useMemo<ReportRow[]>(() => {
+    const raw = [...financialLogs].sort((a, b) => b.date.localeCompare(a.date));
     if (reportType === "daily") {
-      return raw.slice(0, 15); // Show last 15 days
-    } else if (reportType === "weekly") {
-      // Group by weeks
-      const weeks: any = {};
-      raw.forEach((l) => {
-        const date = new Date(l.date);
-        const firstDay = new Date(date.setDate(date.getDate() - date.getDay()));
-        const weekKey = firstDay.toISOString().split("T")[0];
-        
-        if (!weeks[weekKey]) {
-          weeks[weekKey] = {
-            date: `Week of ${weekKey}`,
-            revenue: 0,
-            cogs: 0,
-            amazonFees: 0,
-            adSpend: 0,
-            refundCosts: 0,
-            unitsSold: 0,
-            ordersCount: 0
-          };
-        }
-        weeks[weekKey].revenue += l.revenue || 0;
-        weeks[weekKey].cogs += l.cogs || 0;
-        weeks[weekKey].amazonFees += l.amazonFees || 0;
-        weeks[weekKey].adSpend += l.adSpend || 0;
-        weeks[weekKey].refundCosts += l.refundCosts || 0;
-        weeks[weekKey].unitsSold += l.unitsSold || 0;
-        weeks[weekKey].ordersCount += l.ordersCount || 0;
-      });
-      return Object.values(weeks).slice(0, 8); // Last 8 weeks
-    } else {
-      // Group by months
-      const months: any = {};
-      raw.forEach((l) => {
-        const monthKey = l.date.substring(0, 7); // YYYY-MM
-        if (!months[monthKey]) {
-          months[monthKey] = {
-            date: monthKey,
-            revenue: 0,
-            cogs: 0,
-            amazonFees: 0,
-            adSpend: 0,
-            refundCosts: 0,
-            unitsSold: 0,
-            ordersCount: 0
-          };
-        }
-        months[monthKey].revenue += l.revenue || 0;
-        months[monthKey].cogs += l.cogs || 0;
-        months[monthKey].amazonFees += l.amazonFees || 0;
-        months[monthKey].adSpend += l.adSpend || 0;
-        months[monthKey].refundCosts += l.refundCosts || 0;
-        months[monthKey].unitsSold += l.unitsSold || 0;
-        months[monthKey].ordersCount += l.ordersCount || 0;
-      });
-      return Object.values(months).slice(0, 3); // Last 3 months
+      return raw.slice(0, 15).map((log) => reportRow(log.date, [log]));
     }
+
+    const buckets = new Map<string, FinancialLogEntry[]>();
+    for (const log of raw) {
+      let key = log.date.slice(0, 7);
+      if (reportType === "weekly") {
+        const date = new Date(`${log.date}T00:00:00Z`);
+        date.setUTCDate(date.getUTCDate() - date.getUTCDay());
+        key = date.toISOString().slice(0, 10);
+      }
+      buckets.set(key, [...(buckets.get(key) ?? []), log]);
+    }
+    const limit = reportType === "weekly" ? 8 : 3;
+    return [...buckets.entries()]
+      .sort(([a], [b]) => b.localeCompare(a))
+      .slice(0, limit)
+      .map(([key, logs]) => reportRow(reportType === "weekly" ? `Week of ${key}` : key, logs));
   }, [financialLogs, reportType]);
 
   const productData = useMemo(() => getProductAnalytics(), [getProductAnalytics]);
 
-  const handleExport = (format: "csv" | "excel") => {
+  const handleExport = () => {
     if (activeTab === "finance") {
-      const headers = ["Period / Date", "Gross Sales (₹)", "COGS (₹)", "Amazon Fees (₹)", "Ad Spend (₹)", "Refunds Cost (₹)", "Units Sold", "Orders Synced", "Net Profit (₹)"];
-      const rows = reportRows.map((r: any) => {
-        const profit = (r.revenue || 0) - (r.cogs || 0) - (r.amazonFees || 0) - (r.adSpend || 0) - (r.refundCosts || 0);
-        return [
-          r.date,
-          r.revenue,
-          r.cogs,
-          r.amazonFees,
-          r.adSpend,
-          r.refundCosts,
-          r.unitsSold,
-          r.ordersCount,
-          profit
-        ];
-      });
+      const headers = ["Period / Date", "Gross Sales (₹)", "COGS (₹)", "Shipping (₹)", "Amazon Fees (₹)", "Ad Spend (₹)", "Refund Costs (₹)", "Units Sold", "Orders Synced", "Contribution Profit (₹)"];
+      const rows = reportRows.map((row) => [
+        row.date,
+        row.revenue,
+        row.cogs,
+        row.shippingCost,
+        row.amazonFees,
+        row.adSpend,
+        row.refundCosts,
+        row.unitsSold,
+        row.ordersCount,
+        row.contributionProfit,
+      ]);
       exportToCSV(headers, rows, `sellerplus_${reportType}_financial_report`);
     } else {
-      const headers = ["SKU / ASIN", "Product Title", "Gross Sales (₹)", "Units Sold", "COGS (₹)", "Fees (₹)", "Net Profit (₹)", "Margin (%)", "ROI (%)", "Refund Rate (%)"];
+      const headers = ["SKU / ASIN", "Product Title", "Gross Sales (₹)", "Units Sold", "COGS (₹)", "Fees (₹)", "Contribution Profit (₹)", "Margin (%)", "ROI (%)", "Refund Rate (%)"];
       const rows = productData.map((p) => [
         p.sku,
         p.name,
@@ -154,7 +145,7 @@ export default function ReportsCenterPage() {
         <div>
           <h1 className="text-3xl font-extrabold tracking-tight text-white">Reports Center</h1>
           <p className="text-zinc-400 text-sm mt-1">
-            Generate printable PDF reports, export historical financial statements, or catalog SKU audits.
+            Print and export source-qualified operating facts. Missing inputs remain explicitly unavailable.
           </p>
         </div>
 
@@ -215,10 +206,10 @@ export default function ReportsCenterPage() {
             <Printer className="w-3.5 h-3.5" /> PDF / Print
           </button>
           <button
-            onClick={() => handleExport("excel")}
+            onClick={handleExport}
             className="h-9 px-3 rounded-lg bg-indigo-500 hover:bg-indigo-600 text-white text-xs font-bold transition-all flex items-center gap-1.5"
           >
-            <Download className="w-3.5 h-3.5" /> Export Excel/CSV
+            <Download className="w-3.5 h-3.5" /> Export CSV
           </button>
         </div>
       </div>
@@ -233,44 +224,46 @@ export default function ReportsCenterPage() {
             </h3>
           </div>
           <span className="text-[10px] uppercase font-bold text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded border border-indigo-500/20">
-            FBA Ledger Verified
+            Source-qualified facts
           </span>
         </div>
 
         {activeTab === "finance" ? (
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs min-w-[700px]">
+            <table className="w-full text-left text-xs min-w-[820px]">
               <thead>
                 <tr className="border-b border-white/5 text-zinc-500 font-semibold h-10 uppercase tracking-wider text-[9px]">
                   <th>Reporting Period</th>
                   <th className="text-right">Sales Revenue</th>
                   <th className="text-right">COGS (Costs)</th>
+                  <th className="text-right">Shipping</th>
                   <th className="text-right">Amazon Fees</th>
                   <th className="text-right">Ad Spend</th>
                   <th className="text-right">Refund Costs</th>
                   <th className="text-right">Units sold</th>
                   <th className="text-right">Orders Count</th>
-                  <th className="text-right">Net Profit</th>
+                  <th className="text-right">Contribution Profit</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5 font-medium text-zinc-300">
-                {reportRows.map((r: any) => {
-                  const profit = (r.revenue || 0) - (r.cogs || 0) - (r.amazonFees || 0) - (r.adSpend || 0) - (r.refundCosts || 0);
+                {reportRows.map((row) => {
+                  const profit = row.contributionProfit;
                   return (
-                    <tr key={r.date} className="h-12 hover:bg-white/[0.01]">
-                      <td className="font-bold text-white">{r.date}</td>
-                      <td className="text-right text-white font-mono">{r.revenue !== null && r.revenue !== undefined ? `₹${r.revenue.toLocaleString("en-IN")}` : "N/A"}</td>
-                      <td className="text-right text-rose-300 font-mono">{r.cogs !== null && r.cogs !== undefined ? `-₹${r.cogs.toLocaleString("en-IN")}` : "N/A"}</td>
-                      <td className="text-right text-rose-300 font-mono">{r.amazonFees !== null && r.amazonFees !== undefined ? `-₹${r.amazonFees.toLocaleString("en-IN")}` : "N/A"}</td>
-                      <td className="text-right text-rose-300 font-mono">{r.adSpend !== null && r.adSpend !== undefined ? `-₹${r.adSpend.toLocaleString("en-IN")}` : "N/A"}</td>
-                      <td className="text-right text-rose-300 font-mono">{r.refundCosts !== null && r.refundCosts !== undefined ? `-₹${r.refundCosts.toLocaleString("en-IN")}` : "N/A"}</td>
-                      <td className="text-right font-mono">{r.unitsSold !== null && r.unitsSold !== undefined ? r.unitsSold : "N/A"}</td>
-                      <td className="text-right font-mono">{r.ordersCount !== null && r.ordersCount !== undefined ? r.ordersCount : "N/A"}</td>
+                    <tr key={row.date} className="h-12 hover:bg-white/[0.01]">
+                      <td className="font-bold text-white">{row.date}</td>
+                      <td className="text-right text-white font-mono">{currency(row.revenue)}</td>
+                      <td className="text-right text-rose-300 font-mono">{currency(row.cogs, true)}</td>
+                      <td className="text-right text-rose-300 font-mono">{currency(row.shippingCost, true)}</td>
+                      <td className="text-right text-rose-300 font-mono">{currency(row.amazonFees, true)}</td>
+                      <td className="text-right text-rose-300 font-mono">{currency(row.adSpend, true)}</td>
+                      <td className="text-right text-rose-300 font-mono">{currency(row.refundCosts, true)}</td>
+                      <td className="text-right font-mono">{row.unitsSold}</td>
+                      <td className="text-right font-mono">{row.ordersCount}</td>
                       <td className={cn(
                         "text-right font-bold font-mono",
-                        profit >= 0 ? "text-emerald-400" : "text-rose-400"
+                        profit === null ? "text-zinc-500" : profit >= 0 ? "text-emerald-400" : "text-rose-400"
                       )}>
-                        {profit !== null ? `₹${profit.toLocaleString("en-IN")}` : "N/A"}
+                        {currency(profit)}
                       </td>
                     </tr>
                   );
@@ -289,7 +282,7 @@ export default function ReportsCenterPage() {
                   <th className="text-right">Units sold</th>
                   <th className="text-right">COGS (Costs)</th>
                   <th className="text-right">Fees (Referral/FBA)</th>
-                  <th className="text-right">Net Profit</th>
+                  <th className="text-right">Contribution Profit</th>
                   <th className="text-right">Margin %</th>
                   <th className="text-right">ROI %</th>
                   <th className="text-right">Refund rate</th>
@@ -342,12 +335,12 @@ export default function ReportsCenterPage() {
         {/* Brand Header */}
         <div className="flex justify-between items-start border-b-2 border-zinc-900 pb-4 mb-4">
           <div>
-            <h1 className="text-2xl font-extrabold tracking-tight text-zinc-900 uppercase">SellerPlus OS Consolidated P&L Report</h1>
-            <p className="text-xs text-zinc-500 mt-1">Consolidated Accounting Statement • FBA Ledger Integrated</p>
+            <h1 className="text-2xl font-extrabold tracking-tight text-zinc-900 uppercase">SellerPlus Operating Facts Report</h1>
+            <p className="text-xs text-zinc-500 mt-1">Made by ReyoStudio • Missing financial inputs are shown as N/A</p>
           </div>
           <div className="text-right">
             <span className="text-xs font-bold text-zinc-700">PRINT DATE: {new Date().toLocaleDateString("en-IN")}</span>
-            <p className="text-[10px] text-zinc-500 mt-1">Status: System Verified</p>
+            <p className="text-[10px] text-zinc-500 mt-1">Status: Source-qualified</p>
           </div>
         </div>
 
@@ -360,29 +353,31 @@ export default function ReportsCenterPage() {
                 <th>Period</th>
                 <th className="text-right">Sales Revenue</th>
                 <th className="text-right">COGS (Costs)</th>
+                <th className="text-right">Shipping</th>
                 <th className="text-right">Amazon Fees</th>
                 <th className="text-right">Ad Spend</th>
                 <th className="text-right">Refund Costs</th>
                 <th className="text-right">Units</th>
                 <th className="text-right">Orders</th>
-                <th className="text-right">Net Profit</th>
+                <th className="text-right">Contribution Profit</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-200">
-              {reportRows.map((r: any) => {
-                const profit = (r.revenue || 0) - (r.cogs || 0) - (r.amazonFees || 0) - (r.adSpend || 0) - (r.refundCosts || 0);
+              {reportRows.map((row) => {
+                const profit = row.contributionProfit;
                 return (
-                  <tr key={r.date} className="h-8">
-                    <td className="font-bold text-zinc-800">{r.date}</td>
-                    <td className="text-right font-mono">₹{r.revenue?.toLocaleString("en-IN") || 0}</td>
-                    <td className="text-right text-red-700 font-mono">-₹{r.cogs?.toLocaleString("en-IN") || 0}</td>
-                    <td className="text-right text-red-700 font-mono">-₹{r.amazonFees?.toLocaleString("en-IN") || 0}</td>
-                    <td className="text-right text-red-700 font-mono">-₹{r.adSpend?.toLocaleString("en-IN") || 0}</td>
-                    <td className="text-right text-red-700 font-mono">-₹{r.refundCosts?.toLocaleString("en-IN") || 0}</td>
-                    <td className="text-right font-mono">{r.unitsSold || 0}</td>
-                    <td className="text-right font-mono">{r.ordersCount || 0}</td>
-                    <td className={`text-right font-bold font-mono ${profit >= 0 ? "text-green-700" : "text-red-700"}`}>
-                      ₹{profit.toLocaleString("en-IN")}
+                  <tr key={row.date} className="h-8">
+                    <td className="font-bold text-zinc-800">{row.date}</td>
+                    <td className="text-right font-mono">{currency(row.revenue)}</td>
+                    <td className="text-right text-red-700 font-mono">{currency(row.cogs, true)}</td>
+                    <td className="text-right text-red-700 font-mono">{currency(row.shippingCost, true)}</td>
+                    <td className="text-right text-red-700 font-mono">{currency(row.amazonFees, true)}</td>
+                    <td className="text-right text-red-700 font-mono">{currency(row.adSpend, true)}</td>
+                    <td className="text-right text-red-700 font-mono">{currency(row.refundCosts, true)}</td>
+                    <td className="text-right font-mono">{row.unitsSold}</td>
+                    <td className="text-right font-mono">{row.ordersCount}</td>
+                    <td className={`text-right font-bold font-mono ${profit === null ? "text-zinc-500" : profit >= 0 ? "text-green-700" : "text-red-700"}`}>
+                      {currency(profit)}
                     </td>
                   </tr>
                 );
@@ -398,7 +393,7 @@ export default function ReportsCenterPage() {
         <div className="flex flex-col gap-2 pt-6">
           <div className="border-b border-zinc-900 pb-2 mb-2">
             <h1 className="text-xl font-bold text-zinc-900">SellerPlus OS Performance Ledger</h1>
-            <p className="text-[10px] text-zinc-500">SKU Level Operational Profit Margins & ROI Audits</p>
+            <p className="text-[10px] text-zinc-500">SKU-level source coverage and operating facts</p>
           </div>
           
           <h2 className="text-sm font-bold text-zinc-900 uppercase tracking-wider border-b border-zinc-300 pb-1">2. Product Catalog Unit Diagnostics</h2>
@@ -411,7 +406,7 @@ export default function ReportsCenterPage() {
                 <th className="text-right">Units</th>
                 <th className="text-right">COGS</th>
                 <th className="text-right">Amazon Fees</th>
-                <th className="text-right">Net Profit</th>
+                <th className="text-right">Contribution Profit</th>
                 <th className="text-right">Margin %</th>
                 <th className="text-right">ROI %</th>
               </tr>
@@ -421,15 +416,15 @@ export default function ReportsCenterPage() {
                 <tr key={p.sku} className="h-8">
                   <td className="font-mono text-zinc-700 font-bold">{p.sku}</td>
                   <td className="max-w-[200px] truncate">{p.name}</td>
-                  <td className="text-right font-mono">₹{p.revenue?.toLocaleString("en-IN") || 0}</td>
-                  <td className="text-right font-mono">{p.unitsSold || 0}</td>
-                  <td className="text-right text-red-700 font-mono">-₹{p.cogs?.toLocaleString("en-IN") || 0}</td>
-                  <td className="text-right text-red-700 font-mono">-₹{p.fees?.toLocaleString("en-IN") || 0}</td>
-                  <td className={`text-right font-bold font-mono ${(p.netProfit ?? 0) >= 0 ? "text-green-700" : "text-red-700"}`}>
-                    ₹{p.netProfit?.toLocaleString("en-IN") || 0}
+                  <td className="text-right font-mono">{currency(p.revenue)}</td>
+                  <td className="text-right font-mono">{p.unitsSold ?? "N/A"}</td>
+                  <td className="text-right text-red-700 font-mono">{currency(p.cogs, true)}</td>
+                  <td className="text-right text-red-700 font-mono">{currency(p.fees, true)}</td>
+                  <td className={`text-right font-bold font-mono ${p.netProfit === null ? "text-zinc-500" : p.netProfit >= 0 ? "text-green-700" : "text-red-700"}`}>
+                    {currency(p.netProfit)}
                   </td>
-                  <td className="text-right font-mono">{p.margin}%</td>
-                  <td className="text-right font-mono">{p.roi}%</td>
+                  <td className="text-right font-mono">{p.margin === null ? "N/A" : `${p.margin}%`}</td>
+                  <td className="text-right font-mono">{p.roi === null ? "N/A" : `${p.roi}%`}</td>
                 </tr>
               ))}
             </tbody>
@@ -438,7 +433,7 @@ export default function ReportsCenterPage() {
 
         {/* Footer */}
         <div className="mt-auto border-t border-zinc-300 pt-4 flex justify-between items-center text-[8px] text-zinc-400">
-          <span>SellerPlus Operating System • Automated Financial Report</span>
+          <span>SellerPlus by ReyoStudio • Source-qualified operating report</span>
           <span>Page 2 of 2</span>
         </div>
       </div>

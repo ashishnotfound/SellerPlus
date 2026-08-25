@@ -1,12 +1,12 @@
 "use client";
 
-import React, { Suspense } from "react";
+import React from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { useConnections } from "@/hooks/use-connections";
 import { WidgetRenderer } from "@/components/ui/widgets/WidgetRenderer";
 import { RecommendationCard } from "@/components/ui/recommendation-card";
 import { ExplainableRecommendation, Widget } from "@/lib/ai/schemas";
-import { supabase } from "@/lib/supabase";
+import { sellerplusApiFetch } from "@/lib/client/api-fetch";
 import { PageHeader } from "@/components/page-header";
 import { SkeletonLoader } from "@/components/skeleton-loader";
 import { EmptyState } from "@/components/empty-state";
@@ -20,7 +20,6 @@ import {
   AlertCircle,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { RadarResponse } from "@/lib/ai/schemas";
 
 // ─── Dashboard Loading State ──────────────────────────────────────────
 
@@ -35,8 +34,8 @@ function DashboardSkeleton() {
           <Loader2 className="w-4 h-4 text-indigo-400 animate-spin" />
         </div>
         <div className="flex flex-col gap-1 flex-1">
-          <p className="text-sm font-bold text-white">AI Business Consultant is analyzing your store…</p>
-          <p className="text-xs text-zinc-500">Fetching metrics, running KPI calculations, generating recommendations.</p>
+          <p className="text-sm font-bold text-white">SellerPlus is calculating your verified operating snapshot…</p>
+          <p className="text-xs text-zinc-500">Aggregating tenant-scoped orders, costs, advertising, and inventory.</p>
         </div>
         <div className="flex gap-1 shrink-0">
           {[0, 0.2, 0.4].map((delay, i) => (
@@ -112,7 +111,7 @@ function DashboardEmpty({ onRefresh, amazonConnected }: { onRefresh: () => void,
     <div className="flex flex-col gap-8">
       <PageHeader
         title="Executive Dashboard"
-        description="Your AI-powered command center. Connect your Amazon account to get started."
+        description="Your verified seller operating overview. Connect an Amazon account to get started."
       />
       <OnboardingBanner
         steps={{
@@ -125,7 +124,7 @@ function DashboardEmpty({ onRefresh, amazonConnected }: { onRefresh: () => void,
         size="lg"
         icon={<Activity className="w-10 h-10" />}
         title="No Data Available Yet"
-        description="The AI Business Consultant needs data to work with. Connect your Amazon account and add a few products to see your executive summary."
+        description="SellerPlus needs marketplace data to calculate the operating snapshot. Connect Amazon and run the initial synchronization."
         action={{ label: "Go to Settings", href: "/settings" }}
       />
     </div>
@@ -146,34 +145,16 @@ export default function DashboardPage() {
     isRefetching,
     dataUpdatedAt,
   } = useQuery({
-    queryKey: ["bi-dashboard", user?.id],
+    queryKey: ["bi-dashboard", user?.id, user?.workspaceId],
     queryFn: async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      const res = await fetch("/api/ai/bi", {
+      const res = await sellerplusApiFetch("/api/ai/bi", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
-        },
         body: JSON.stringify({
           mode: "Executive Summary",
           goal: "Provide a high-level overview of business health, key metrics, and urgent recommendations.",
         }),
       });
-      if (!res.ok) throw new Error("Failed to load AI Business Intelligence");
-      
-      const { data: { session: s2 } } = await supabase.auth.getSession();
-      const headers = { ...(s2?.access_token ? { Authorization: `Bearer ${s2.access_token}` } : {}) };
-
-      const [riskRes, oppRes] = await Promise.all([
-        fetch("/api/ai/risks", { headers }).catch(() => null),
-        fetch("/api/ai/opportunities", { headers }).catch(() => null)
-      ]);
-
-      const [riskData, oppData] = await Promise.all([
-        riskRes?.ok ? riskRes.json() : null,
-        oppRes?.ok ? oppRes.json() : null
-      ]);
+      if (!res.ok) throw new Error("Failed to load the verified operating snapshot.");
 
       const bi = await res.json() as {
         summary: string;
@@ -181,15 +162,22 @@ export default function DashboardPage() {
         recommendations: ExplainableRecommendation[];
       };
 
-      return {
-        ...bi,
-        risks: riskData?.data as RadarResponse | undefined,
-        opportunities: oppData?.data as RadarResponse | undefined
-      };
+      return bi;
     },
     enabled: !!user?.id,
     staleTime: 1000 * 60 * 5, // 5 minutes cache
     retry: 1,
+  });
+
+  const { data: onboardingState } = useQuery({
+    queryKey: ["onboarding", user?.id, user?.workspaceId],
+    queryFn: async () => {
+      const response = await sellerplusApiFetch("/api/onboarding/status");
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error ?? "Onboarding status is unavailable.");
+      return payload.data as { costProfileAdded: boolean; aiChatUsed: boolean };
+    },
+    enabled: !!user?.id && !!user?.workspaceId,
   });
 
   if (isLoading || isRefetching) return <DashboardSkeleton />;
@@ -201,49 +189,11 @@ export default function DashboardPage() {
   const kpiWidgets = biData.widgets.filter((w) => w.type === "KPI");
   let chartWidgets = biData.widgets.filter((w) => w.type !== "KPI");
 
-  // Adaptive Layout: Reorder chart widgets based on identified critical/high risks
-  if (biData.risks && biData.risks.items.length > 0) {
-    const highRisks = biData.risks.items.filter(r => r.severityOrImpact === "Critical" || r.severityOrImpact === "High");
-    const riskKeywords = highRisks.flatMap(r => r.title.toLowerCase().split(" "));
-    
-    chartWidgets = chartWidgets.sort((a, b) => {
-      let aScore = a.importance === "High" ? 10 : 0;
-      let bScore = b.importance === "High" ? 10 : 0;
-      
-      const aText = (a.title + " " + (a.description || "")).toLowerCase();
-      const bText = (b.title + " " + (b.description || "")).toLowerCase();
-      
-      riskKeywords.forEach(kw => {
-        if (kw.length > 3 && aText.includes(kw)) aScore += 5;
-        if (kw.length > 3 && bText.includes(kw)) bScore += 5;
-      });
-      
-      return bScore - aScore;
-    });
-  } else {
-    // Default sorting
-    chartWidgets = chartWidgets.sort((a, b) => (a.importance === "High" ? -1 : b.importance === "High" ? 1 : 0));
-  }
+  chartWidgets = chartWidgets.sort((a, b) => (a.importance === "High" ? -1 : b.importance === "High" ? 1 : 0));
 
   const lastUpdated = dataUpdatedAt
     ? new Date(dataUpdatedAt).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })
     : null;
-
-  // Fetch onboarding state (cost profiles & ai chat usage)
-  const { data: onboardingState } = useQuery({
-    queryKey: ["onboarding", user?.id],
-    queryFn: async () => {
-      const [costRes, chatRes] = await Promise.all([
-        supabase.from("cost_profiles").select("id").eq("user_id", user?.id).limit(1),
-        supabase.from("ai_recommendation_history").select("id").eq("user_id", user?.id).limit(1)
-      ]);
-      return {
-        costProfileAdded: (costRes.data?.length ?? 0) > 0,
-        aiChatUsed: (chatRes.data?.length ?? 0) > 0
-      };
-    },
-    enabled: !!user?.id,
-  });
 
   const costProfileAdded = onboardingState?.costProfileAdded ?? false;
   const aiChatUsed = onboardingState?.aiChatUsed ?? false;
@@ -272,7 +222,7 @@ export default function DashboardPage() {
         <div className="flex items-center gap-1.5 -mt-4">
           <Sparkles className="w-3 h-3 text-indigo-400" />
           <span className="text-[11px] text-zinc-600">
-            AI analysis last updated at <span className="text-zinc-500">{lastUpdated}</span>
+            Operating snapshot updated at <span className="text-zinc-500">{lastUpdated}</span>
           </span>
         </div>
       )}
@@ -286,21 +236,6 @@ export default function DashboardPage() {
             aiChatUsed: aiChatUsed,
           }}
         />
-      )}
-
-      {/* Radar Alerts */}
-      {(biData.risks?.items.length || 0) > 0 && (
-        <div className="flex flex-col gap-3">
-          {biData.risks?.items.filter(r => r.severityOrImpact === "Critical" || r.severityOrImpact === "High").map(risk => (
-            <div key={risk.id} className="bg-rose-500/10 border border-rose-500/20 rounded-xl p-4 flex items-start gap-4">
-              <AlertCircle className="w-5 h-5 text-rose-500 shrink-0 mt-0.5" />
-              <div>
-                <h4 className="font-bold text-rose-500 mb-1">{risk.title}</h4>
-                <p className="text-sm text-rose-500/80">{risk.description}</p>
-              </div>
-            </div>
-          ))}
-        </div>
       )}
 
       {/* KPI Grid */}
@@ -328,7 +263,7 @@ export default function DashboardPage() {
         <div className="flex flex-col gap-4">
           <div className="flex items-center justify-between">
             <div>
-              <h2 className="text-lg font-bold text-white">AI Action Items</h2>
+              <h2 className="text-lg font-bold text-white">Verified Action Items</h2>
               <p className="text-xs text-zinc-500 mt-0.5">
                 {biData.recommendations.length} recommendation{biData.recommendations.length !== 1 ? "s" : ""} found — sorted by priority
               </p>
@@ -343,18 +278,6 @@ export default function DashboardPage() {
               <RecommendationCard
                 key={rec.id}
                 recommendation={rec}
-                onApprove={async (id) => {
-                  await supabase
-                    .from("ai_recommendation_history")
-                    .update({ lifecycle: "Approved" })
-                    .eq("id", id);
-                }}
-                onReject={async (id) => {
-                  await supabase
-                    .from("ai_recommendation_history")
-                    .update({ lifecycle: "Archived" })
-                    .eq("id", id);
-                }}
               />
             ))}
           </div>

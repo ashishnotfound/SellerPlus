@@ -3,12 +3,12 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { GlassCard } from "@/components/glass-card";
 import { useAuth } from "@/hooks/use-auth";
-import { supabase } from "@/lib/supabase";
+import { sellerplusApiFetch } from "@/lib/client/api-fetch";
 import { formatCurrency } from "@/lib/utils";
 import {
   Calculator, Plus, Trash2, Edit3, Save, Sparkles,
   RefreshCw, Search, Tag, Package, Check, Copy,
-  AlertCircle, Loader2, X, Send, Bot, User, CheckCircle
+  Loader2, X, Send, Bot, User, CheckCircle
 } from "lucide-react";
 import { useToastStore } from "@/hooks/use-toast-store";
 
@@ -22,6 +22,7 @@ interface CostProfile {
   labor_cost: number;
   misc_cost: number;
   created_at: string;
+  version: number;
 }
 
 interface ListingItem {
@@ -68,20 +69,22 @@ export default function CostsPage() {
     {
       id: "welcome",
       role: "assistant",
-      text: "Hello! I am **ARIA**, your AI Cost Assistant. Ask me to create profiles, edit packaging costs, or link your products to catalog listings. I'm ready!",
+      text: "Hello! I am **SellerPlus AI**, your cost assistant. Ask me to create profiles, edit packaging costs, or link your products to catalog listings.",
       timestamp: new Date()
     }
   ]);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
   const [filterUnassigned, setFilterUnassigned] = useState(false);
+  const [costPage, setCostPage] = useState(1);
+  const [totalListings, setTotalListings] = useState(0);
   const chatBottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (user?.id) {
       loadData();
     }
-  }, [user?.id]);
+  }, [user?.id, user?.workspaceId, costPage]);
 
   useEffect(() => {
     chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -98,25 +101,14 @@ export default function CostsPage() {
   const loadData = async () => {
     setLoading(true);
     try {
-      // 1. Fetch Cost Profiles
-      const { data: pData } = await supabase
-        .from("cost_profiles")
-        .select("*")
-        .eq("user_id", user?.id)
-        .order("created_at", { ascending: false });
-        
-      setProfiles(pData || []);
-
-      // 2. Fetch Listings
-      const { data: lData } = await supabase
-        .from("listings")
-        .select("id, sku, asin, title, price, cost_profile_id, main_image")
-        .eq("user_id", user?.id)
-        .order("sku", { ascending: true });
-        
-      setListings(lData || []);
+      const response = await sellerplusApiFetch(`/api/cost-profiles?page=${costPage}&pageSize=100`);
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Cost configuration could not be loaded.");
+      setProfiles(payload.data.profiles || []);
+      setListings(payload.data.listings || []);
+      setTotalListings(payload.data.pagination?.total || 0);
     } catch (e) {
-      console.error("Failed to load Cost Configurations:", e);
+      useToastStore.getState().error("Costs unavailable", e instanceof Error ? e.message : "Try again later.");
     } finally {
       setLoading(false);
     }
@@ -163,31 +155,28 @@ export default function CostsPage() {
     setSavingProfile(true);
 
     const payload = {
-      user_id: user.id,
       name: profileName.trim(),
-      printing_cost: parseFloat(printingCost) || 0,
-      material_cost: parseFloat(materialCost) || 0,
-      packaging_cost: parseFloat(packagingCost) || 0,
-      shipping_cost: parseFloat(shippingCost) || 0,
-      labor_cost: parseFloat(laborCost) || 0,
-      misc_cost: parseFloat(miscCost) || 0
+      costs: {
+        printingCost: parseFloat(printingCost) || 0,
+        materialCost: parseFloat(materialCost) || 0,
+        packagingCost: parseFloat(packagingCost) || 0,
+        shippingCost: parseFloat(shippingCost) || 0,
+        laborCost: parseFloat(laborCost) || 0,
+        miscCost: parseFloat(miscCost) || 0,
+      },
     };
 
     try {
-      if (editingProfile) {
-        const { error } = await supabase
-          .from("cost_profiles")
-          .update(payload)
-          .eq("id", editingProfile.id);
-        if (error) throw error;
-      } else {
-        const { error } = await supabase
-          .from("cost_profiles")
-          .insert(payload);
-        if (error) throw error;
-      }
+      const response = await sellerplusApiFetch("/api/cost-profiles", {
+        method: editingProfile ? "PATCH" : "POST",
+        body: JSON.stringify(editingProfile
+          ? { ...payload, id: editingProfile.id, version: editingProfile.version }
+          : payload),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Cost profile could not be saved.");
       setShowFormModal(false);
-      loadData();
+      await loadData();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Unknown error";
       useToastStore.getState().error("Save Failed", msg);
@@ -196,15 +185,15 @@ export default function CostsPage() {
     }
   };
 
-  const handleDeleteProfile = async (id: string) => {
+  const handleDeleteProfile = async (profile: CostProfile) => {
     if (!confirm("Are you sure you want to delete this Cost Profile? Listings mapped to it will be unassigned.")) return;
     try {
-      const { error } = await supabase
-        .from("cost_profiles")
-        .delete()
-        .eq("id", id);
-      if (error) throw error;
-      loadData();
+      const response = await sellerplusApiFetch(`/api/cost-profiles?id=${profile.id}&version=${profile.version}`, {
+        method: "DELETE",
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Cost profile could not be deleted.");
+      await loadData();
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Unknown error";
       useToastStore.getState().error("Delete Failed", msg);
@@ -218,16 +207,16 @@ export default function CostsPage() {
     try {
       const profileVal = bulkProfileId === "unassign" ? null : bulkProfileId;
       
-      const { error } = await supabase
-        .from("listings")
-        .update({ cost_profile_id: profileVal })
-        .in("id", selectedListings);
-
-      if (error) throw error;
+      const response = await sellerplusApiFetch("/api/cost-profiles/assign", {
+        method: "POST",
+        body: JSON.stringify({ listingIds: selectedListings, profileId: profileVal }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Cost profile assignment failed.");
       
       setSelectedListings([]);
       setBulkProfileId("");
-      loadData();
+      await loadData();
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Unknown error";
       useToastStore.getState().error("Assignment Failed", msg);
@@ -238,12 +227,6 @@ export default function CostsPage() {
   const handleSendChat = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!chatInput.trim() || !user?.id) return;
-
-    const key = localStorage.getItem("gemini_api_key") || "";
-    if (!key) {
-      useToastStore.getState().warning("API Key Required", "Please paste your Gemini API Key in the Settings page first.");
-      return;
-    }
 
     const userMessage = {
       id: `user_${Date.now()}`,
@@ -258,17 +241,11 @@ export default function CostsPage() {
     setChatLoading(true);
 
     try {
-      const res = await fetch("/api/ai/cost-chat", {
+      const res = await sellerplusApiFetch("/api/ai/cost-chat", {
         method: "POST",
-        headers: { 
-          "Content-Type": "application/json",
-          "x-gemini-key": key
-        },
         body: JSON.stringify({
           message: userMessage.text,
           chatHistory: messages.slice(-10).map(m => ({ role: m.role, text: m.text })),
-          listings,
-          profiles
         })
       });
 
@@ -297,88 +274,6 @@ export default function CostsPage() {
       }]);
     } finally {
       setChatLoading(false);
-    }
-  };
-
-  const applyPendingAction = async (messageId: string, action: any) => {
-    if (!user?.id) return;
-    try {
-      if (action.type === "create_profile") {
-        const payload = action.payload;
-        const { error } = await supabase
-          .from("cost_profiles")
-          .insert({
-            user_id: user.id,
-            name: payload.name || "Custom NLP Profile",
-            printing_cost: parseFloat(payload.printing_cost || 0),
-            material_cost: parseFloat(payload.material_cost || 0),
-            packaging_cost: parseFloat(payload.packaging_cost || 0),
-            shipping_cost: parseFloat(payload.shipping_cost || 0),
-            labor_cost: parseFloat(payload.labor_cost || 0),
-            misc_cost: parseFloat(payload.misc_cost || 0)
-          });
-        if (error) throw error;
-        
-        setMessages(prev => [
-          ...prev.map(m => m.id === messageId ? { ...m, pendingAction: null } : m),
-          {
-            id: `success_${Date.now()}`,
-            role: "assistant",
-            text: `✓ Created cost profile **${payload.name}** successfully.`,
-            timestamp: new Date()
-          }
-        ]);
-        loadData();
-      }
-      else if (action.type === "assign_sku") {
-        const { sku, profile_name } = action.payload;
-        const matchedProfile = profiles.find(p => p.name.toLowerCase() === profile_name.toLowerCase());
-        if (!matchedProfile) {
-          throw new Error(`Could not find a cost profile named "${profile_name}". Please create it first.`);
-        }
-        const { error } = await supabase
-          .from("listings")
-          .update({ cost_profile_id: matchedProfile.id })
-          .eq("sku", sku)
-          .eq("user_id", user.id);
-        if (error) throw error;
-        
-        setMessages(prev => [
-          ...prev.map(m => m.id === messageId ? { ...m, pendingAction: null } : m),
-          {
-            id: `success_${Date.now()}`,
-            role: "assistant",
-            text: `✓ Linked SKU **${sku}** to profile **${profile_name}**!`,
-            timestamp: new Date()
-          }
-        ]);
-        loadData();
-      }
-      else if (action.type === "update_cost") {
-        const { profile_name, cost_type, value } = action.payload;
-        const matchedProfile = profiles.find(p => p.name.toLowerCase() === profile_name.toLowerCase());
-        if (!matchedProfile) {
-          throw new Error(`Could not find a cost profile named "${profile_name}".`);
-        }
-        const { error } = await supabase
-          .from("cost_profiles")
-          .update({ [cost_type]: parseFloat(value || 0) })
-          .eq("id", matchedProfile.id);
-        if (error) throw error;
-        
-        setMessages(prev => [
-          ...prev.map(m => m.id === messageId ? { ...m, pendingAction: null } : m),
-          {
-            id: `success_${Date.now()}`,
-            role: "assistant",
-            text: `✓ Updated **${cost_type.replace('_', ' ')}** on **${profile_name}** to **₹${value}**.`,
-            timestamp: new Date()
-          }
-        ]);
-        loadData();
-      }
-    } catch (e: any) {
-      useToastStore.getState().error("Action Failed", "Action execution failed: " + e.message);
     }
   };
 
@@ -460,17 +355,9 @@ export default function CostsPage() {
     let subtitle = "";
     
     switch (action.type) {
-      case "create_profile":
-        title = `Create Profile: ${action.payload.name || "Custom"}`;
-        subtitle = `Print: ₹${action.payload.printing_cost || 0} • Packaging: ₹${action.payload.packaging_cost || 0} • Other: ₹${(Number(action.payload.material_cost || 0) + Number(action.payload.shipping_cost || 0) + Number(action.payload.labor_cost || 0) + Number(action.payload.misc_cost || 0))}`;
-        break;
-      case "assign_sku":
-        title = `Link SKU: ${action.payload.sku}`;
-        subtitle = `Profile: ${action.payload.profile_name}`;
-        break;
-      case "update_cost":
-        title = `Update Profile: ${action.payload.profile_name}`;
-        subtitle = `${action.payload.cost_type.replace('_', ' ')} ➔ ₹${action.payload.value}`;
+      case "review_proposal":
+        title = "Cost change requires approval";
+        subtitle = action.payload.summary || "Review the proposed cost change";
         break;
       default:
         return null;
@@ -483,12 +370,12 @@ export default function CostsPage() {
           <div className="text-[9px] text-zinc-500 truncate mt-0.5">{subtitle}</div>
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
-          <button
-            onClick={() => applyPendingAction(m.id, action)}
-            className="h-7 px-3 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-black text-[10px] font-black transition-all"
+          <a
+            href="/automations/approvals"
+            className="h-7 px-3 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-black text-[10px] font-black transition-all flex items-center"
           >
-            Apply
-          </button>
+            Review
+          </a>
           <button
             onClick={() => rejectPendingAction(m.id)}
             className="h-7 px-3 rounded-lg bg-transparent border border-white/10 text-zinc-400 hover:text-white hover:bg-white/5 text-[10px] font-bold transition-all"
@@ -545,7 +432,7 @@ export default function CostsPage() {
   }, [selectedListings, profiles, listings]);
 
   // Expected profit calculator for profile cards
-  const getExpectedProfitForProfile = (profile: CostProfile) => {
+  const getContributionBeforeAmazonFees = (profile: CostProfile) => {
     const mapped = listings.filter(l => l.cost_profile_id === profile.id);
     if (mapped.length === 0) return 0;
     
@@ -554,15 +441,12 @@ export default function CostsPage() {
       profile.printing_cost + profile.material_cost + profile.packaging_cost + 
       profile.shipping_cost + profile.labor_cost + profile.misc_cost;
       
-    const fees = avgPrice * 0.15; // Amazon Fee ~15%
-    const profit = avgPrice - totalCost - fees;
-    return Math.max(0, Math.round(profit));
+    return Math.round(avgPrice - totalCost);
   };
 
   // Live calculation values inside create/edit profile modal
   const liveCalculations = useMemo(() => {
     const sellPrice = parseFloat(previewPrice) || 0;
-    const fee = sellPrice * 0.15;
     const print = parseFloat(printingCost) || 0;
     const pack = parseFloat(packagingCost) || 0;
     const other = 
@@ -572,13 +456,12 @@ export default function CostsPage() {
       (parseFloat(miscCost) || 0);
 
     const totalCogs = print + pack + other;
-    const netProfit = sellPrice - fee - totalCogs;
-    const margin = sellPrice > 0 ? (netProfit / sellPrice) * 100 : 0;
+    const contribution = sellPrice - totalCogs;
+    const margin = sellPrice > 0 ? (contribution / sellPrice) * 100 : 0;
 
     return {
-      fee: Math.round(fee),
       cogs: Math.round(totalCogs),
-      profit: Math.round(netProfit),
+      profit: Math.round(contribution),
       margin: Math.round(margin)
     };
   }, [previewPrice, printingCost, materialCost, packagingCost, shippingCost, laborCost, miscCost]);
@@ -617,17 +500,12 @@ export default function CostsPage() {
             </div>
             <div>
               <h4 className="text-xs font-extrabold text-white tracking-wide flex items-center gap-2">
-                ARIA Cost Assistant
+                SellerPlus AI Cost Assistant
                 <span className="text-[8px] uppercase tracking-wider font-extrabold bg-indigo-500/20 text-indigo-300 px-2 py-0.5 rounded-full border border-indigo-500/10">Interactive</span>
               </h4>
               <p className="text-[10px] text-zinc-500 mt-0.5 leading-none">Enter raw cost queries in natural language to update your catalog rules</p>
             </div>
           </div>
-          {typeof window !== "undefined" && !localStorage.getItem("gemini_api_key") && (
-            <span className="text-[10px] bg-rose-500/10 border border-rose-500/20 text-rose-400 px-2.5 py-1 rounded-lg font-bold flex items-center gap-1.5 animate-pulse">
-              <AlertCircle className="w-3.5 h-3.5" /> API Key Missing
-            </span>
-          )}
         </div>
 
         {/* Chat History Panel */}
@@ -709,7 +587,7 @@ export default function CostsPage() {
                   <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-bounce" style={{ animationDelay: "150ms" }} />
                   <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-bounce" style={{ animationDelay: "300ms" }} />
                 </div>
-                <span className="font-mono text-[10px] text-zinc-500 uppercase tracking-widest font-black">ARIA is typing</span>
+                <span className="font-mono text-[10px] text-zinc-500 uppercase tracking-widest font-black">SellerPlus AI is working</span>
               </div>
             </div>
           )}
@@ -731,17 +609,12 @@ export default function CostsPage() {
         </div>
 
         {/* Chat input box */}
-        {typeof window !== "undefined" && !localStorage.getItem("gemini_api_key") ? (
-          <div className="p-3 bg-rose-950/10 border border-rose-500/10 rounded-xl text-center text-xs text-rose-300">
-            Please configure your <a href="/settings" className="underline font-bold text-rose-200">Gemini API Key in Settings</a> to enable natural language cost assistant features.
-          </div>
-        ) : (
           <form onSubmit={handleSendChat} className="flex gap-2">
             <input
               type="text"
               value={chatInput}
               onChange={(e) => setChatInput(e.target.value)}
-              placeholder="Ask ARIA to create profiles, edit packaging costs, or link your products..."
+              placeholder="Ask SellerPlus AI to create profiles, edit packaging costs, or link your products..."
               disabled={chatLoading}
               className="flex-1 h-11 px-4 rounded-xl border border-white/5 bg-[#0E0E12] text-xs text-white placeholder-zinc-650 focus:outline-none focus:border-white/10 disabled:opacity-40"
             />
@@ -753,7 +626,6 @@ export default function CostsPage() {
               <Send className="w-4 h-4" />
             </button>
           </form>
-        )}
       </GlassCard>
 
       {/* Grid Layout for Active Profiles and Product SKU list */}
@@ -792,7 +664,7 @@ export default function CostsPage() {
                   p.printing_cost + p.material_cost + p.packaging_cost + 
                   p.shipping_cost + p.labor_cost + p.misc_cost;
                 
-                const expectedProfit = getExpectedProfitForProfile(p);
+                const expectedContribution = getContributionBeforeAmazonFees(p);
                 const mappedCount = listings.filter(l => l.cost_profile_id === p.id).length;
 
                 return (
@@ -807,7 +679,7 @@ export default function CostsPage() {
                           <button onClick={() => handleOpenEdit(p)} className="p-1.5 hover:bg-white/5 rounded-lg transition-colors text-zinc-400 hover:text-white">
                             <Edit3 className="w-3.5 h-3.5" />
                           </button>
-                          <button onClick={() => handleDeleteProfile(p.id)} className="p-1.5 hover:bg-white/5 rounded-lg transition-colors text-zinc-400 hover:text-rose-450">
+                          <button onClick={() => handleDeleteProfile(p)} className="p-1.5 hover:bg-white/5 rounded-lg transition-colors text-zinc-400 hover:text-rose-450">
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
                         </div>
@@ -830,8 +702,8 @@ export default function CostsPage() {
                           </span>
                         </div>
                         <div className="flex justify-between border-b border-white/[0.02] pb-1.5">
-                          <span className="text-zinc-500">Expected Profit</span>
-                          <span className="text-emerald-450 font-bold">₹{expectedProfit.toLocaleString("en-IN")}</span>
+                          <span className="text-zinc-500">Before Amazon Fees</span>
+                          <span className="text-emerald-450 font-bold">₹{expectedContribution.toLocaleString("en-IN")}</span>
                         </div>
                         <div className="flex justify-between pt-0.5">
                           <span className="text-zinc-500">Mapped Products</span>
@@ -1000,6 +872,31 @@ export default function CostsPage() {
                 </tbody>
               </table>
             </div>
+            {totalListings > 100 && (
+              <div className="mt-4 flex items-center justify-between border-t border-white/5 pt-4 text-[10px] text-zinc-500">
+                <span>
+                  Page {costPage} of {Math.max(1, Math.ceil(totalListings / 100))} · {totalListings.toLocaleString("en-IN")} listings
+                </span>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    disabled={costPage === 1 || loading}
+                    onClick={() => { setSelectedListings([]); setCostPage((page) => Math.max(1, page - 1)); }}
+                    className="rounded-lg border border-white/10 px-3 py-1.5 disabled:opacity-40"
+                  >
+                    Previous
+                  </button>
+                  <button
+                    type="button"
+                    disabled={costPage >= Math.ceil(totalListings / 100) || loading}
+                    onClick={() => { setSelectedListings([]); setCostPage((page) => page + 1); }}
+                    className="rounded-lg border border-white/10 px-3 py-1.5 disabled:opacity-40"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            )}
           </GlassCard>
         </div>
       </div>
@@ -1128,7 +1025,7 @@ export default function CostsPage() {
             {/* Right Side: Live Profit Preview */}
             <div className="w-full md:w-60 shrink-0 border-t md:border-t-0 md:border-l border-white/5 pt-5 md:pt-0 md:pl-6 flex flex-col justify-between">
               <div>
-                <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest block mb-4">Live Profit Preview</span>
+                <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest block mb-4">Contribution Preview</span>
 
                 <div className="flex flex-col gap-3 text-xs">
                   <div className="flex flex-col gap-1">
@@ -1141,9 +1038,8 @@ export default function CostsPage() {
                     />
                   </div>
 
-                  <div className="flex justify-between pt-1 border-b border-white/[0.02] pb-1">
-                    <span className="text-zinc-500">Amazon Fees (15%)</span>
-                    <span className="text-zinc-400">-₹{liveCalculations.fee}</span>
+                  <div className="rounded border border-amber-400/15 bg-amber-400/[0.04] p-2 text-[9px] leading-relaxed text-amber-300">
+                    Amazon fees are not included until an actual fee source is available for this SKU.
                   </div>
                   
                   <div className="flex justify-between border-b border-white/[0.02] pb-1">
@@ -1166,13 +1062,13 @@ export default function CostsPage() {
               {/* Dynamic margins calculations */}
               <div className="mt-6 pt-4 border-t border-white/5">
                 <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-[10px] text-zinc-500 font-bold uppercase tracking-wider">Net Profit</span>
+                  <span className="text-[10px] text-zinc-500 font-bold uppercase tracking-wider">Before Fees</span>
                   <span className={`text-base font-black font-mono ${liveCalculations.profit >= 0 ? 'text-emerald-450' : 'text-rose-450'}`}>
                     {liveCalculations.profit >= 0 ? `₹${liveCalculations.profit}` : `-₹${Math.abs(liveCalculations.profit)}`}
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-[10px] text-zinc-500 font-bold uppercase tracking-wider">Profit Margin</span>
+                  <span className="text-[10px] text-zinc-500 font-bold uppercase tracking-wider">Contribution Margin</span>
                   <span className={`text-xs font-extrabold font-mono ${liveCalculations.margin >= 20 ? 'text-emerald-450' : liveCalculations.margin >= 10 ? 'text-indigo-400' : 'text-rose-400'}`}>
                     {liveCalculations.margin}%
                   </span>

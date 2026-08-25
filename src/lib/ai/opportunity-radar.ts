@@ -1,62 +1,46 @@
-import { RadarResponse, RadarResponseSchema } from "./schemas";
-import { generateValidatedJson } from "./schema-validator";
-import { BIRepository } from "@/lib/repositories/bi-repository";
-import { KPIService } from "@/lib/services/kpi-service";
+import { RadarResponseSchema, type RadarResponse } from "./schemas";
+import { BIRepository, type BusinessSummary } from "@/lib/repositories/bi-repository";
 import { log } from "@/lib/logger";
 
+/**
+ * Aggregate account totals can identify areas that need review, but they cannot
+ * prove a scale opportunity. Growth, keyword, and campaign opportunities need
+ * entity-level trends plus profit coverage, so this scanner intentionally fails
+ * closed until those verified inputs are available.
+ */
+export function buildDeterministicOpportunities(summary: BusinessSummary): RadarResponse {
+  return RadarResponseSchema.parse({
+    kind: "opportunity",
+    methodology: "deterministic_evidence_v1",
+    dataWindow: summary.dataWindow,
+    dataSources: [
+      summary.orders.dataSource,
+      summary.inventory.dataSource,
+      summary.cogs.dataSource,
+      ...(summary.ads.dataAvailable ? [summary.ads.dataSource] : []),
+    ],
+    limitations: [
+      "No opportunity is emitted from account-level aggregates alone.",
+      "Verified opportunities require entity-level period comparisons and complete economics, including COGS and advertising spend.",
+      "SellerPlus does not invent sales lift, demand, keyword volume, or expected financial impact.",
+    ],
+    items: [],
+  });
+}
+
 export class OpportunityRadar {
-  
-  static async scan(userId: string): Promise<RadarResponse> {
-    
-    // 1. Gather raw data
-    const [adsSummary, ordersSummary, inventorySummary] = await Promise.all([
-      BIRepository.getAdsSummary(userId),
-      BIRepository.getOrdersSummary(userId),
-      BIRepository.getInventorySummary(userId),
-    ]);
-    
-    // 2. Prepare Context Payload focusing on opportunities
-    const contextPayload = {
-      ads: adsSummary,
-      orders: ordersSummary,
-      inventory: inventorySummary,
-    };
-
-    // 3. Construct System Prompt
-    const systemPrompt = `
-You are SellerPlus AI Opportunity Radar.
-Your objective is to constantly search for growth opportunities:
-- Products growing unusually fast
-- Profitable keywords
-- Inventory expansion opportunities
-- Advertising opportunities (e.g. low ACOS campaigns that could scale)
-- Cost reduction opportunities
-
-Here is the VERIFIED business data:
-${JSON.stringify(contextPayload, null, 2)}
-
-You MUST output a valid JSON object matching the RadarResponseSchema.
-Identify actionable opportunities. Assign impact (Critical/High/Medium/Low), confidence, evidence, and a recommended action for each opportunity.
-Only output genuine opportunities backed by the data.
-    `.trim();
-
+  static async scan(userId: string, workspaceId: string): Promise<RadarResponse> {
     const startTime = Date.now();
-    log.info(`[OpportunityRadar] Starting scan`, undefined, { userId });
-
-    // 4. Execute LLM Call
-    const response = await generateValidatedJson<RadarResponse>(
-      systemPrompt,
-      RadarResponseSchema,
-      { temperature: 0.2 }, // Slightly more creative than risk radar
-      userId
-    );
+    log.info("[OpportunityRadar] Starting deterministic scan", undefined, { userId, workspaceId });
+    const summary = await BIRepository.getBusinessSummary(workspaceId);
+    const response = buildDeterministicOpportunities(summary);
 
     const durationMs = Date.now() - startTime;
-    log.info(`[OpportunityRadar] Scan complete.`, undefined, { 
-      durationMs, 
-      opportunitiesFound: response.items.length
+    log.info("[OpportunityRadar] Deterministic scan complete.", undefined, {
+      durationMs,
+      opportunitiesFound: response.items.length,
+      workspaceId,
     });
-
     return response;
   }
 }

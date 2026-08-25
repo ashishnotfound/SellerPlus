@@ -11,6 +11,7 @@
  */
 
 import { SupabaseClient } from "@supabase/supabase-js";
+import { z } from "zod";
 import { DraftListingOutputSchema, DraftListingOutput } from "./listing-draft-schema";
 import { generateValidatedJson } from "./schema-validator";
 import { log } from "@/lib/logger";
@@ -31,6 +32,16 @@ export interface ListingDraftResult {
   revisionNumber: number;
 }
 
+const ListingDraftRequestSchema = z.object({
+  productName: z.string().trim().min(1).max(200),
+  category: z.string().trim().max(100).optional(),
+  targetKeywords: z.array(z.string().trim().min(1).max(80)).max(20).optional(),
+  competitorAsins: z.array(z.string().regex(/^[A-Z0-9]{10}$/)).max(20).optional(),
+  uniqueSellingPoints: z.array(z.string().trim().min(1).max(200)).max(10).optional(),
+  targetAudience: z.string().trim().max(200).optional(),
+  existingListingId: z.string().uuid().optional(),
+});
+
 /**
  * Generate and persist a validated draft listing.
  *
@@ -40,18 +51,11 @@ export interface ListingDraftResult {
  */
 export async function generateListingDraft(
   userId: string,
+  workspaceId: string,
   rawPayload: Record<string, unknown>,
   supabaseAdmin: SupabaseClient
 ): Promise<ListingDraftResult> {
-  const req: ListingDraftRequest = {
-    productName: (rawPayload.productName as string) || "Unnamed Product",
-    category: rawPayload.category as string | undefined,
-    targetKeywords: rawPayload.targetKeywords as string[] | undefined,
-    competitorAsins: rawPayload.competitorAsins as string[] | undefined,
-    uniqueSellingPoints: rawPayload.uniqueSellingPoints as string[] | undefined,
-    targetAudience: rawPayload.targetAudience as string | undefined,
-    existingListingId: rawPayload.existingListingId as string | undefined,
-  };
+  const req: ListingDraftRequest = ListingDraftRequestSchema.parse(rawPayload);
 
   const systemPrompt = `
 You are an Amazon listing optimisation specialist with deep expertise in SEO, conversion copywriting, and A+ Content.
@@ -108,9 +112,9 @@ You MUST output a valid JSON object matching the DraftListingOutputSchema exactl
     // ── New revision of an existing listing ───────────────────────────────
     const { data: existing } = await supabaseAdmin
       .from("listings")
-      .select("draft_revision, draft_history")
+      .select("draft_revision, title, description, bullet_points, backend_keywords, aplus_content, infographic_concepts, ai_image_prompts")
       .eq("id", req.existingListingId)
-      .eq("user_id", userId)
+      .eq("workspace_id", workspaceId)
       .maybeSingle();
 
     if (!existing) {
@@ -118,44 +122,64 @@ You MUST output a valid JSON object matching the DraftListingOutputSchema exactl
     }
 
     revisionNumber = (existing.draft_revision ?? 0) + 1;
-    const previousHistory = (existing.draft_history as object[]) ?? [];
-
     const { error: updateError } = await supabaseAdmin
       .from("listings")
       .update({
         title: draft.title,
+        description: draft.description,
         bullet_points: draft.bulletPoints,
         aplus_content: draft.apluscontent,
         backend_keywords: draft.backendKeywords,
         infographic_concepts: draft.infographicConcepts.map((c) => c.concept),
         ai_image_prompts: draft.aiImagePrompts,
         status: "draft",
+        publication_state: "draft",
         draft_revision: revisionNumber,
-        draft_history: [
-          ...previousHistory,
-          { ...snapshotRevision, revision: revisionNumber },
-        ],
+        updated_at: new Date().toISOString(),
       })
       .eq("id", req.existingListingId)
-      .eq("user_id", userId);
+      .eq("workspace_id", workspaceId);
 
     if (updateError) throw new Error(`Failed to update listing: ${updateError.message}`);
     listingId = req.existingListingId;
+
+    const { error: versionError } = await supabaseAdmin.from("listing_versions").insert({
+      workspace_id: workspaceId,
+      listing_id: listingId,
+      title: existing.title,
+      description: existing.description,
+      bullet_points: existing.bullet_points,
+      keywords: existing.backend_keywords,
+      snapshot_data: {
+        aplusContent: existing.aplus_content,
+        infographicConcepts: existing.infographic_concepts,
+        aiImagePrompts: existing.ai_image_prompts,
+      },
+      change_summary: "Snapshot before AI-generated draft revision",
+      user_action: "AI draft",
+      version_number: Math.max(1, revisionNumber - 1),
+    });
+    if (versionError) throw new Error(`Failed to version listing draft: ${versionError.message}`);
   } else {
     // ── Create new draft listing ──────────────────────────────────────────
     const { data: inserted, error: insertError } = await supabaseAdmin
       .from("listings")
       .insert({
         user_id: userId,
+        workspace_id: workspaceId,
+        channel: "amazon",
+        price: 0,
         title: draft.title,
+        description: draft.description,
         bullet_points: draft.bulletPoints,
         aplus_content: draft.apluscontent,
         backend_keywords: draft.backendKeywords,
         infographic_concepts: draft.infographicConcepts.map((c) => c.concept),
         ai_image_prompts: draft.aiImagePrompts,
         status: "draft",
+        publication_state: "draft",
+        data_source: "ai_generated",
         draft_revision: 1,
-        draft_history: [snapshotRevision],
       })
       .select("id")
       .single();
@@ -164,6 +188,20 @@ You MUST output a valid JSON object matching the DraftListingOutputSchema exactl
       throw new Error(`Failed to create draft listing: ${insertError?.message}`);
     }
     listingId = inserted.id as string;
+
+    const { error: versionError } = await supabaseAdmin.from("listing_versions").insert({
+      workspace_id: workspaceId,
+      listing_id: listingId,
+      title: draft.title,
+      description: draft.description,
+      bullet_points: draft.bulletPoints,
+      keywords: draft.backendKeywords,
+      snapshot_data: { ...snapshotRevision, seoRationale: draft.seoRationale },
+      change_summary: "Initial AI-generated listing draft",
+      user_action: "AI draft",
+      version_number: 1,
+    });
+    if (versionError) throw new Error(`Failed to version listing draft: ${versionError.message}`);
   }
 
   return { listingId, title: draft.title, revisionNumber };
@@ -177,54 +215,68 @@ You MUST output a valid JSON object matching the DraftListingOutputSchema exactl
  * @param publishedByUserId - The user performing the approval action
  * @param supabaseAdmin - Service-role client
  */
-export async function publishListingDraft(
+export async function approveListingDraft(
   listingId: string,
-  publishedByUserId: string,
+  workspaceId: string,
+  approvedByUserId: string,
   supabaseAdmin: SupabaseClient
 ): Promise<void> {
   const { data: existing, error: fetchError } = await supabaseAdmin
     .from("listings")
-    .select("status, draft_revision, draft_history, title, bullet_points, backend_keywords")
+    .select("status, publication_state, draft_revision, title, description, bullet_points, backend_keywords")
     .eq("id", listingId)
-    .eq("user_id", publishedByUserId)
+    .eq("workspace_id", workspaceId)
     .maybeSingle();
 
   if (fetchError || !existing) {
-    throw new Error(`Listing ${listingId} not found or unauthorized.`);
+    throw new Error(`Listing ${listingId} not found in this workspace.`);
   }
 
   if (existing.status !== "draft") {
     throw new Error(`Listing ${listingId} is not a draft (status: ${existing.status}).`);
   }
 
-  const publishRevision = {
+  const approvalRevision = {
     revision: (existing.draft_revision ?? 0) + 1,
-    action: "published",
-    published_by: publishedByUserId,
-    published_at: new Date().toISOString(),
+    action: "approved_for_publish",
+    approvedBy: approvedByUserId,
+    approvedAt: new Date().toISOString(),
   };
 
   const { error: updateError } = await supabaseAdmin
     .from("listings")
     .update({
-      status: "active",
-      published_at: new Date().toISOString(),
-      published_by: publishedByUserId,
-      draft_revision: publishRevision.revision,
-      draft_history: [
-        ...((existing.draft_history as object[]) ?? []),
-        publishRevision,
-      ],
+      publication_state: "approved",
+      approved_for_publish_at: approvalRevision.approvedAt,
+      approved_for_publish_by: approvedByUserId,
+      draft_revision: approvalRevision.revision,
+      updated_at: approvalRevision.approvedAt,
     })
     .eq("id", listingId)
-    .eq("user_id", publishedByUserId);
+    .eq("workspace_id", workspaceId)
+    .eq("publication_state", existing.publication_state);
 
   if (updateError) {
-    throw new Error(`Failed to publish listing: ${updateError.message}`);
+    throw new Error(`Failed to approve listing: ${updateError.message}`);
   }
 
-  log.info(`[ListingDraft] Published listing ${listingId} (rev ${publishRevision.revision})`, undefined, {
+  const { error: versionError } = await supabaseAdmin.from("listing_versions").insert({
+    workspace_id: workspaceId,
+    listing_id: listingId,
+    title: existing.title,
+    description: existing.description,
+    bullet_points: existing.bullet_points,
+    keywords: existing.backend_keywords,
+    snapshot_data: approvalRevision,
+    change_summary: "Approved for deterministic marketplace publishing",
+    user_action: "Approve",
+    version_number: approvalRevision.revision,
+  });
+  if (versionError) throw new Error(`Failed to record listing approval: ${versionError.message}`);
+
+  log.info(`[ListingDraft] Approved listing ${listingId} (rev ${approvalRevision.revision})`, undefined, {
     listingId,
-    publishedByUserId,
+    workspaceId,
+    approvedByUserId,
   });
 }

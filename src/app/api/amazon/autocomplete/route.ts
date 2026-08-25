@@ -1,57 +1,81 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
+import { authenticate, authErrorResponse, requirePermission } from "@/lib/auth-middleware";
+
+const querySchema = z.object({
+  q: z.string().trim().min(1).max(100),
+  marketplace: z.enum(["IN", "US", "UK", "JP"]).default("IN"),
+});
+
+const marketplaceConfig = {
+  IN: { host: "completion.amazon.in", marketplaceId: "A21TJRUUN4KGV", locale: "en_IN" },
+  US: { host: "completion.amazon.com", marketplaceId: "ATVPDKIKX0DER", locale: "en_US" },
+  UK: { host: "completion.amazon.co.uk", marketplaceId: "A1F83G8C2ARO7P", locale: "en_GB" },
+  JP: { host: "completion.amazon.co.jp", marketplaceId: "A1VC38T7YXB528", locale: "ja_JP" },
+} as const;
 
 export async function GET(request: Request) {
   try {
-    const { searchParams } = new URL(request.url);
-    const keyword = searchParams.get("q") || "";
-    const marketplace = searchParams.get("marketplace") || "Amazon India";
-
-    if (!keyword) {
-      return NextResponse.json({ suggestions: [] });
-    }
-
-    // 1. Resolve host and mid based on marketplace
-    let host = "completion.amazon.in";
-    let mid = "A21TJRUUN4KGV"; // India
-    let lop = "en_IN";
-
-    const normMkt = marketplace.toLowerCase();
-    if (normMkt.includes("us") || normMkt.includes("com") || normMkt.includes("america")) {
-      host = "completion.amazon.com";
-      mid = "ATVPDKIKX0DER"; // US
-      lop = "en_US";
-    } else if (normMkt.includes("uk") || normMkt.includes("united kingdom") || normMkt.includes("co.uk") || normMkt.includes("europe")) {
-      host = "completion.amazon.co.uk";
-      mid = "A1F83G8C2ARO7P"; // UK
-      lop = "en_GB";
-    } else if (normMkt.includes("japan") || normMkt.includes("jp") || normMkt.includes("east")) {
-      host = "completion.amazon.co.jp";
-      mid = "A1VC38T7YXB528"; // Japan
-      lop = "ja_JP";
-    }
-
-    const url = `https://${host}/api/2017/suggestions?session-id=133-8255278-6511363&customer-id=&request-id=&page-type=Search&lop=${lop}&site-variant=desktop&client-info=amazon-search-ui&mid=${mid}&alias=aps&b2b=0&fresh=0&ks=65&prefix=${encodeURIComponent(keyword)}&event=onKeyPress&limit=11&fb=1&suggestion-type=KEYWORD`;
-
-    const res = await fetch(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "application/json"
-      }
+    const actor = await authenticate(request);
+    requirePermission(actor, "catalog.read");
+    const url = new URL(request.url);
+    const query = querySchema.parse({
+      q: url.searchParams.get("q") ?? "",
+      marketplace: url.searchParams.get("marketplace") ?? "IN",
     });
+    const config = marketplaceConfig[query.marketplace];
+    const upstream = new URL(`https://${config.host}/api/2017/suggestions`);
+    upstream.search = new URLSearchParams({
+      "page-type": "Search",
+      lop: config.locale,
+      "site-variant": "desktop",
+      "client-info": "amazon-search-ui",
+      mid: config.marketplaceId,
+      alias: "aps",
+      prefix: query.q,
+      event: "onKeyPress",
+      limit: "11",
+      "suggestion-type": "KEYWORD",
+    }).toString();
 
-    if (!res.ok) {
-      const errText = await res.text();
-      console.error("Autocomplete fetch failed:", errText);
-      return NextResponse.json({ error: "Failed to fetch suggestions from Amazon" }, { status: res.status });
+    const response = await fetch(upstream, {
+      headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(5_000),
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      return NextResponse.json(
+        { error: "Amazon suggestions are temporarily unavailable.", code: "UPSTREAM_UNAVAILABLE" },
+        { status: 502 },
+      );
     }
 
-    const data = await res.json();
-    const suggestions = data.suggestions?.map((s: any) => s.value) || [];
+    const data = await response.json();
+    const parsed = z.object({
+      suggestions: z.array(z.object({ value: z.string() })).default([]),
+    }).safeParse(data);
 
-    return NextResponse.json({ suggestions });
-
-  } catch (error: any) {
-    console.error("Autocomplete fetch error:", error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({
+      suggestions: parsed.success
+        ? parsed.data.suggestions.map((item) => item.value).slice(0, 11)
+        : [],
+      source: "amazon_autocomplete",
+      marketplace: query.marketplace,
+    });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return NextResponse.json(
+        { error: "Enter a valid keyword and marketplace.", code: "VALIDATION_ERROR" },
+        { status: 400 },
+      );
+    }
+    const response = authErrorResponse(error);
+    if (response.status !== 500) {
+      return NextResponse.json(response.body, { status: response.status });
+    }
+    return NextResponse.json(
+      { error: "Amazon suggestions are temporarily unavailable.", code: "UPSTREAM_UNAVAILABLE" },
+      { status: 502 },
+    );
   }
 }

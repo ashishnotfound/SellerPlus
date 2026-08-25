@@ -6,7 +6,7 @@
  */
 
 import { createHash } from "crypto";
-import { getAdminClient } from "@/lib/auth-middleware";
+import { getAdminClient } from "@/lib/supabase/admin";
 import { config } from "@/lib/config";
 import { GenerationOptions, GenerationResult } from "./types";
 
@@ -44,13 +44,14 @@ export class AiCacheManager {
   /**
    * Retrieves a valid cache entry. Returns null on miss or expiration.
    */
-  async get(key: string): Promise<CacheResult | null> {
+  async get(key: string, workspaceId: string): Promise<CacheResult | null> {
     const adminClient = getAdminClient();
 
     const { data, error } = await adminClient
       .from("ai_response_cache")
       .select("response_text, tokens_used, estimated_cost, is_negative, expires_at")
       .eq("cache_key", key)
+      .eq("workspace_id", workspaceId)
       .maybeSingle();
 
     if (error || !data) {
@@ -60,7 +61,12 @@ export class AiCacheManager {
     const expiresAt = new Date(data.expires_at).getTime();
     if (Date.now() > expiresAt) {
       // Clean up expired cache entry in background
-      adminClient.from("ai_response_cache").delete().eq("cache_key", key).then();
+      adminClient
+        .from("ai_response_cache")
+        .delete()
+        .eq("cache_key", key)
+        .eq("workspace_id", workspaceId)
+        .then();
       return null;
     }
 
@@ -77,6 +83,7 @@ export class AiCacheManager {
    */
   async set(
     key: string,
+    workspaceId: string,
     result: GenerationResult,
     options?: GenerationOptions,
     isNegative = false
@@ -94,6 +101,7 @@ export class AiCacheManager {
       .from("ai_response_cache")
       .upsert({
         cache_key: key,
+        workspace_id: workspaceId,
         response_text: result.text,
         tokens_used: result.tokensUsed || 0,
         estimated_cost: result.estimatedCost || 0.0,
@@ -106,9 +114,13 @@ export class AiCacheManager {
   /**
    * Manually invalidates a cache key.
    */
-  async invalidate(key: string): Promise<void> {
+  async invalidate(key: string, workspaceId: string): Promise<void> {
     const adminClient = getAdminClient();
-    await adminClient.from("ai_response_cache").delete().eq("cache_key", key);
+    await adminClient
+      .from("ai_response_cache")
+      .delete()
+      .eq("cache_key", key)
+      .eq("workspace_id", workspaceId);
   }
 }
 

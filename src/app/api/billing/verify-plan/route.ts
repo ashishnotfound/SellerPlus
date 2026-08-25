@@ -10,10 +10,7 @@
  */
 
 import { NextResponse } from "next/server";
-import {
-  authenticateWithDevFallback,
-  authErrorResponse,
-} from "@/lib/auth-middleware";
+import { authenticate, authErrorResponse } from "@/lib/auth-middleware";
 
 const PLAN_LIMITS: Record<string, { maxGenerations: number; maxAudits: number }> = {
   free:     { maxGenerations: 10,   maxAudits: 3 },
@@ -34,17 +31,18 @@ const GATED_FEATURES: Record<string, string[]> = {
 
 export async function GET(request: Request) {
   try {
-    const { userId, supabaseAdmin } = await authenticateWithDevFallback(request);
+    const actor = await authenticate(request);
 
     // 1. Fetch active subscription from DB
-    const { data: subscription } = await supabaseAdmin
+    const { data: subscription, error: subscriptionError } = await actor.supabaseAdmin
       .from("subscriptions")
       .select("plan_type, status, current_period_start, current_period_end, cancel_at_period_end")
-      .eq("user_id", userId)
+      .eq("workspace_id", actor.workspaceId)
       .in("status", ["active", "trialing"])
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
+    if (subscriptionError) throw subscriptionError;
 
     const plan = subscription?.plan_type || "free";
     const status = subscription?.status || "active";
@@ -55,26 +53,23 @@ export async function GET(request: Request) {
       ? new Date(subscription.current_period_start).toISOString()
       : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
-    let generationsCount = 0;
-    let auditsCount = 0;
-    try {
-      const { count: gc } = await supabaseAdmin
-        .from("ai_generations")
-        .select("id", { count: "exact", head: true })
-        .eq("user_id", userId)
-        .gte("created_at", periodStart);
-      generationsCount = gc || 0;
-
-      const { count: ac } = await supabaseAdmin
-        .from("ai_generations")
-        .select("id", { count: "exact", head: true })
-        .eq("user_id", userId)
-        .eq("generation_type", "judge")
-        .gte("created_at", periodStart);
-      auditsCount = ac || 0;
-    } catch (_usageErr) {
-      // ai_generations table may not exist yet — usage counts default to 0
-    }
+    const [{ count: generationsCount, error: generationError }, { count: auditsCount, error: auditError }] =
+      await Promise.all([
+        actor.supabaseAdmin
+          .from("ai_usage_records")
+          .select("id", { count: "exact", head: true })
+          .eq("workspace_id", actor.workspaceId)
+          .in("status", ["succeeded", "cached"])
+          .gte("created_at", periodStart),
+        actor.supabaseAdmin
+          .from("ai_usage_records")
+          .select("id", { count: "exact", head: true })
+          .eq("workspace_id", actor.workspaceId)
+          .in("feature", ["listing_judge", "listing_comparison"])
+          .in("status", ["succeeded", "cached"])
+          .gte("created_at", periodStart),
+      ]);
+    if (generationError || auditError) throw generationError ?? auditError;
 
     // 3. Build feature access map
     const featureAccess: Record<string, boolean> = {};
@@ -92,11 +87,11 @@ export async function GET(request: Request) {
         maxAudits: limits.maxAudits,
       },
       usage: {
-        aiGenerations: generationsCount || 0,
-        auditsUsed: auditsCount || 0,
+        aiGenerations: generationsCount ?? 0,
+        auditsUsed: auditsCount ?? 0,
       },
       featureAccess,
-    });
+    }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
     const { body, status } = authErrorResponse(error);
     return NextResponse.json(body, { status });

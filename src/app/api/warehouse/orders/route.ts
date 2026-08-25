@@ -1,7 +1,7 @@
 /**
  * GET /api/warehouse/orders
  *
- * Returns orders pending warehouse action for the authenticated user.
+ * Returns orders pending warehouse action for the authenticated workspace.
  * Server-side RBAC: only warehouse-permitted roles can access this endpoint.
  * Never relies on client-side route protection alone.
  *
@@ -12,29 +12,29 @@
 
 import { NextResponse } from "next/server";
 import {
-  authenticateWithDevFallback,
+  authenticate,
   authErrorResponse,
   AuthError,
-  requireRole,
+  requirePermission,
 } from "@/lib/auth-middleware";
-import { WAREHOUSE_ROLES, WAREHOUSE_VISIBLE_STATUSES } from "@/lib/warehouse/types";
 import { log } from "@/lib/logger";
 
 export async function GET(request: Request): Promise<NextResponse> {
   try {
-    const user = await authenticateWithDevFallback(request);
-    requireRole(user, [...WAREHOUSE_ROLES]);
+    const user = await authenticate(request);
+    requirePermission(user, "order.read");
 
     const { searchParams } = new URL(request.url);
     const statusFilter = searchParams.get("status") ?? "pending";
-    const limit = Math.min(parseInt(searchParams.get("limit") ?? "50", 10), 100);
+    const requestedLimit = Number.parseInt(searchParams.get("limit") ?? "50", 10);
+    const limit = Number.isFinite(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 100) : 50;
 
     const statuses =
       statusFilter === "all"
-        ? [...WAREHOUSE_VISIBLE_STATUSES]
+        ? ["pending", "packed"]
         : statusFilter === "packed"
-        ? ["packed", "Packed"]
-        : ["pending", "Pending", "Unshipped", "PartiallyShipped"];
+        ? ["packed"]
+        : ["pending"];
 
     // Fetch orders with their line items via a join
     const { data: orders, error } = await user.supabaseAdmin
@@ -42,7 +42,7 @@ export async function GET(request: Request): Promise<NextResponse> {
       .select(`
         id,
         channel_order_id,
-        status,
+        warehouse_status,
         customer_name,
         shipping_address,
         shipping_method,
@@ -56,11 +56,12 @@ export async function GET(request: Request): Promise<NextResponse> {
           title,
           quantity_ordered,
           quantity_shipped,
-          item_price
+          item_price,
+          listing:listings(main_image)
         )
       `)
-      .eq("user_id", user.userId)
-      .in("status", statuses)
+      .eq("workspace_id", user.workspaceId)
+      .in("warehouse_status", statuses)
       .order("purchase_date", { ascending: false })
       .limit(limit);
 
@@ -74,7 +75,22 @@ export async function GET(request: Request): Promise<NextResponse> {
       statusFilter,
     });
 
-    return NextResponse.json({ orders: orders ?? [] });
+    const mappedOrders = (orders ?? []).map((order: Record<string, any>) => ({
+      id: order.id,
+      channel_order_id: order.channel_order_id,
+      status: order.warehouse_status,
+      customer_name: order.customer_name,
+      shipping_address: order.shipping_address,
+      shipping_method: order.shipping_method,
+      packing_notes: order.packing_notes,
+      fulfillment_channel: order.fulfillment_channel,
+      purchase_date: order.purchase_date,
+      items: (order.order_items ?? []).map((item: Record<string, any>) => {
+        const listing = Array.isArray(item.listing) ? item.listing[0] : item.listing;
+        return { ...item, main_image: listing?.main_image ?? null, listing: undefined };
+      }),
+    }));
+    return NextResponse.json({ orders: mappedOrders }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (err) {
     const { body, status } = authErrorResponse(err);
     return NextResponse.json(body, { status });

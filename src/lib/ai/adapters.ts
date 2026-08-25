@@ -13,6 +13,7 @@ import {
   GenerationResult, 
   LLMSetting 
 } from "./types";
+import { configuredCostUsd } from "./pricing";
 
 // ─── Capability Registry Mapping ─────────────────────────────────────
 
@@ -62,11 +63,11 @@ export const PROVIDER_CAPABILITIES: Record<string, ProviderCapability[]> = {
     ProviderCapability.Vision,
     ProviderCapability.Reasoning
   ],
-  ollama: [
+  nvidia: [
     ProviderCapability.JsonMode,
     ProviderCapability.StructuredJson,
-    ProviderCapability.CodeGeneration,
-    ProviderCapability.ToolUse,
+    ProviderCapability.Reasoning,
+    ProviderCapability.FastResponse,
     ProviderCapability.LowCost
   ],
   grok: [
@@ -119,13 +120,18 @@ export class GeminiAdapter implements ProviderAdapter {
     const latency = Date.now() - start;
     const text = result.response.text();
 
-    // Estimate tokens: ~4 chars per token average fallback
-    const tokens = Math.round((prompt.length + text.length) / 4);
+    const usage = result.response.usageMetadata;
+    const inputTokens = usage?.promptTokenCount ?? Math.ceil(prompt.length / 4);
+    const outputTokens = usage?.candidatesTokenCount ?? Math.ceil(text.length / 4);
+    const estimatedCost = configuredCostUsd(this.setting, inputTokens, outputTokens);
 
     return {
       text,
-      tokensUsed: tokens,
-      estimatedCost: 0 // Free tier default / low cost
+      tokensUsed: inputTokens + outputTokens,
+      inputTokens,
+      outputTokens,
+      estimatedCost: estimatedCost ?? undefined,
+      costStatus: estimatedCost === null ? "unknown" : "configured_estimate",
     };
   }
 
@@ -152,10 +158,12 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
       this.endpoint = "https://api.deepseek.com/chat/completions";
     } else if (setting.provider === "openrouter") {
       this.endpoint = "https://openrouter.ai/api/v1/chat/completions";
+    } else if (setting.provider === "nvidia") {
+      this.endpoint = "https://integrate.api.nvidia.com/v1/chat/completions";
     } else if (setting.provider === "grok" || setting.provider === "xai") {
       this.endpoint = "https://api.x.ai/v1/chat/completions";
     } else {
-      this.endpoint = setting.endpoint_url || "http://localhost:11434/v1/chat/completions";
+      throw new Error(`Unsupported OpenAI-compatible provider: ${setting.provider}`);
     }
   }
 
@@ -172,6 +180,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
       model: this.setting.model_name,
       messages: [{ role: "user", content: prompt }],
       temperature: options?.temperature !== undefined ? options.temperature : 0.1,
+      max_tokens: options?.maxTokens ?? 2048,
     };
 
     if (options?.capabilities?.includes(ProviderCapability.JsonMode) || options?.capabilities?.includes(ProviderCapability.StructuredJson)) {
@@ -182,37 +191,39 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
       method: "POST",
       headers,
       body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(60_000),
+      cache: "no-store",
     });
     
     if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`OpenAI-compatible provider error (${res.status}): ${errText}`);
+      throw new Error(`AI provider request failed with HTTP ${res.status}.`);
     }
     
     const data = await res.json();
     const text = data.choices?.[0]?.message?.content || "";
-    const promptTokens = data.usage?.prompt_tokens || 0;
-    const completionTokens = data.usage?.completion_tokens || 0;
+    const promptTokens = Number(data.usage?.prompt_tokens ?? 0);
+    const completionTokens = Number(data.usage?.completion_tokens ?? 0);
     const totalTokens = promptTokens + completionTokens;
-
-    // Estimate cost per million tokens (approx defaults)
-    let ratePerMillion = 0.15; // default low cost
-    if (this.setting.model_name.includes("gpt-4")) ratePerMillion = 5.00;
-    const estimatedCost = (totalTokens / 1000000) * ratePerMillion;
+    const providerReportedCost = this.setting.provider === "openrouter" && Number.isFinite(Number(data.usage?.cost))
+      ? Math.max(0, Number(data.usage.cost))
+      : null;
+    const configuredCost = configuredCostUsd(this.setting, promptTokens, completionTokens);
+    const estimatedCost = providerReportedCost ?? configuredCost;
 
     return {
       text,
       tokensUsed: totalTokens,
-      estimatedCost
+      inputTokens: promptTokens,
+      outputTokens: completionTokens,
+      estimatedCost: estimatedCost ?? undefined,
+      costStatus: providerReportedCost !== null
+        ? "provider_reported"
+        : configuredCost !== null ? "configured_estimate" : "unknown",
     };
   }
 
   async healthCheck(): Promise<boolean> {
     try {
-      if (this.setting.provider === "ollama") {
-        // Ollama might run locally without key
-        return true;
-      }
       return !!this.setting.api_key && this.setting.api_key.trim().length > 0;
     } catch {
       return false;
@@ -246,11 +257,12 @@ export class AnthropicAdapter implements ProviderAdapter {
       method: "POST",
       headers,
       body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(60_000),
+      cache: "no-store",
     });
     
     if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`Anthropic provider error (${res.status}): ${errText}`);
+      throw new Error(`Anthropic provider request failed with HTTP ${res.status}.`);
     }
     
     const data = await res.json();
@@ -259,13 +271,15 @@ export class AnthropicAdapter implements ProviderAdapter {
     const completionTokens = data.usage?.output_tokens || 0;
     const totalTokens = promptTokens + completionTokens;
 
-    // Estimate cost: Sonnet averages $3/input million, $15/output million
-    const cost = (promptTokens / 1000000) * 3.00 + (completionTokens / 1000000) * 15.00;
+    const cost = configuredCostUsd(this.setting, promptTokens, completionTokens);
 
     return {
       text,
       tokensUsed: totalTokens,
-      estimatedCost: cost
+      inputTokens: promptTokens,
+      outputTokens: completionTokens,
+      estimatedCost: cost ?? undefined,
+      costStatus: cost === null ? "unknown" : "configured_estimate",
     };
   }
 
@@ -289,7 +303,7 @@ export function getAdapterForSetting(setting: LLMSetting): ProviderAdapter {
     case "openai":
     case "deepseek":
     case "openrouter":
-    case "ollama":
+    case "nvidia":
     case "grok":
     case "xai":
       return new OpenAICompatibleAdapter(setting);

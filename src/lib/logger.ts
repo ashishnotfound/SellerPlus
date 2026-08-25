@@ -6,7 +6,7 @@
  * production JSON formatting, and database storage audits.
  */
 
-import { getAdminClient } from "@/lib/auth-middleware";
+import { getAdminClient } from "@/lib/supabase/admin";
 
 export enum LogLevel {
   TRACE = 0,
@@ -39,6 +39,8 @@ export const REDACTION_REGISTRY: RedactionRule[] = [
   { name: "Bearer Token", pattern: /Bearer\s+[A-Za-z0-9\-\._~\+\/]+=*/g, replacement: "Bearer [REDACTED]" },
   { name: "API Key (sk-)", pattern: /sk-[a-zA-Z0-9]{20,}/g, replacement: "[REDACTED_OPENAI_KEY]" },
   { name: "Google API Key", pattern: /AIzaSy[A-Za-z0-9_-]{33,40}/g, replacement: "[REDACTED_GOOGLE_KEY]" },
+  { name: "Amazon Refresh Token", pattern: /Atzr\|[A-Za-z0-9._~+\/-]{20,}/g, replacement: "[REDACTED_AMAZON_TOKEN]" },
+  { name: "JWT", pattern: /eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+/g, replacement: "[REDACTED_JWT]" },
   { name: "Postgres Connection String", pattern: /postgres(ql)?:\/\/[^:]+:[^@]+@[a-zA-Z0-9.-]+(:\d+)?(\/[a-zA-Z0-9_.-]+)?/g, replacement: "postgres://[REDACTED_CREDENTIALS]@[REDACTED_HOST]" },
   { name: "Email Address", pattern: /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, replacement: "[EMAIL_REDACTED]" },
 ];
@@ -53,7 +55,7 @@ export function registerRedactionRule(name: string, pattern: RegExp, replacement
 /**
  * Scrubs sensitive patterns from messages and metadata recursively.
  */
-export function redactSensitiveData(data: any): any {
+export function redactSensitiveData(data: unknown): unknown {
   if (typeof data === "string") {
     let scrubbed = data;
     for (const rule of REDACTION_REGISTRY) {
@@ -67,13 +69,14 @@ export function redactSensitiveData(data: any): any {
   }
   
   if (data !== null && typeof data === "object") {
-    const cleaned: Record<string, any> = {};
-    for (const key of Object.keys(data)) {
+    const record = data as Record<string, unknown>;
+    const cleaned: Record<string, unknown> = {};
+    for (const key of Object.keys(record)) {
       // Do not log raw prompt text or prompt bodies
-      if (["prompt", "text", "body", "message"].includes(key.toLowerCase()) && typeof data[key] === "string") {
+      if (["prompt", "text", "body", "message", "token", "secret", "password", "authorization", "cookie"].includes(key.toLowerCase()) && typeof record[key] === "string") {
         cleaned[key] = "[CONTENT_REDACTED_FOR_SECURITY]";
       } else {
-        cleaned[key] = redactSensitiveData(data[key]);
+        cleaned[key] = redactSensitiveData(record[key]);
       }
     }
     return cleaned;
@@ -101,13 +104,13 @@ export class Logger {
     return level >= this.minLevel;
   }
 
-  private formatMessage(level: LogLevel, message: string, correlationId?: string, meta?: any) {
+  private formatMessage(level: LogLevel, message: string, correlationId?: string, meta?: unknown) {
     const timestamp = new Date().toISOString();
     const levelName = LogLevelNames[level];
     
     // Redact sensitive patterns in both message and metadata
     const scrubbedMessage = redactSensitiveData(message);
-    const scrubbedMeta = meta ? redactSensitiveData(meta) : {};
+    const scrubbedMeta = (meta ? redactSensitiveData(meta) : {}) as Record<string, unknown>;
 
     const payload = {
       timestamp,
@@ -131,7 +134,7 @@ export class Logger {
     level: LogLevel,
     message: string,
     correlationId?: string,
-    meta?: any
+    meta?: unknown
   ): Promise<void> {
     // Only write operationally significant logs (WARN, ERROR, FATAL) to database to avoid unbounded table writes
     if (level < LogLevel.WARN || typeof window !== "undefined") {
@@ -139,27 +142,32 @@ export class Logger {
     }
 
     try {
+      const metaRecord = meta && typeof meta === "object" && !Array.isArray(meta)
+        ? meta as Record<string, unknown>
+        : {};
+      const workspaceId = typeof metaRecord.workspaceId === "string" ? metaRecord.workspaceId : null;
+      if (!workspaceId) return;
       const adminClient = getAdminClient();
       const levelName = LogLevelNames[level];
       const scrubbedMessage = redactSensitiveData(message);
-      const scrubbedMeta = meta ? redactSensitiveData(meta) : {};
+      const scrubbedMeta = (meta ? redactSensitiveData(meta) : {}) as Record<string, unknown>;
 
       await adminClient
         .from("system_logs")
         .insert({
+          workspace_id: workspaceId,
           level: levelName,
           message: scrubbedMessage,
           correlation_id: correlationId || null,
           metadata: scrubbedMeta,
           created_at: new Date().toISOString()
         });
-    } catch (err) {
-      // Avoid infinite loop in logger - print directly to stdout
-      console.warn("[Logger] Failed to write system logs to database:", err);
+    } catch {
+      // Avoid an infinite logging loop. Console output above remains available.
     }
   }
 
-  private log(level: LogLevel, message: string, correlationId?: string, meta?: any) {
+  private log(level: LogLevel, message: string, correlationId?: string, meta?: unknown) {
     if (!this.shouldLog(level)) return;
 
     const formatted = this.formatMessage(level, message, correlationId, meta);
@@ -177,27 +185,27 @@ export class Logger {
     this.persistToDatabase(level, message, correlationId, meta).catch(() => {});
   }
 
-  trace(message: string, correlationId?: string, meta?: any) {
+  trace(message: string, correlationId?: string, meta?: unknown) {
     this.log(LogLevel.TRACE, message, correlationId, meta);
   }
 
-  debug(message: string, correlationId?: string, meta?: any) {
+  debug(message: string, correlationId?: string, meta?: unknown) {
     this.log(LogLevel.DEBUG, message, correlationId, meta);
   }
 
-  info(message: string, correlationId?: string, meta?: any) {
+  info(message: string, correlationId?: string, meta?: unknown) {
     this.log(LogLevel.INFO, message, correlationId, meta);
   }
 
-  warn(message: string, correlationId?: string, meta?: any) {
+  warn(message: string, correlationId?: string, meta?: unknown) {
     this.log(LogLevel.WARN, message, correlationId, meta);
   }
 
-  error(message: string, correlationId?: string, meta?: any) {
+  error(message: string, correlationId?: string, meta?: unknown) {
     this.log(LogLevel.ERROR, message, correlationId, meta);
   }
 
-  fatal(message: string, correlationId?: string, meta?: any) {
+  fatal(message: string, correlationId?: string, meta?: unknown) {
     this.log(LogLevel.FATAL, message, correlationId, meta);
   }
 }

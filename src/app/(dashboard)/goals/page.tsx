@@ -1,15 +1,14 @@
 "use client";
 
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import { GlassCard } from "@/components/glass-card";
 import { Confetti } from "@/components/confetti";
 import { useAuth } from "@/hooks/use-auth";
 import { useGoalsStore, Goal } from "@/hooks/use-goals-store";
-import { useAnalyticsStore } from "@/hooks/use-analytics-store";
 import { formatCurrency } from "@/lib/utils";
 import {
-  Target, Plus, Trash2, CheckCircle2, Edit3, Trophy,
+  Target, Plus, Trash2, CheckCircle2, Trophy,
   TrendingUp, Calendar, Package, Sparkles, X, Star,
   ShoppingBag, Laptop, Camera, Car, Home, Plane, Gift,
   Loader2, ChevronRight, Flame, Clock, Zap,
@@ -96,15 +95,13 @@ export default function GoalsPage() {
   const deleteGoal = useGoalsStore((s) => s.deleteGoal);
   const completeGoal = useGoalsStore((s) => s.completeGoal);
   const computeMetrics = useGoalsStore((s) => s.computeMetrics);
-  const getSummary = useAnalyticsStore((s) => s.getSummary);
-  const financialLogs = useAnalyticsStore((s) => s.financialLogs);
+  const planningContext = useGoalsStore((s) => s.planningContext);
 
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [form, setForm] = useState<CreateGoalForm>(DEFAULT_FORM);
   const [saving, setSaving] = useState(false);
   const [confettiActive, setConfettiActive] = useState(false);
   const [celebrationGoal, setCelebrationGoal] = useState<string | null>(null);
-  const [editingGoal, setEditingGoal] = useState<Goal | null>(null);
   const [addSavingsModal, setAddSavingsModal] = useState<{ goal: Goal; amount: string } | null>(null);
 
   const searchParams = useSearchParams();
@@ -124,20 +121,8 @@ export default function GoalsPage() {
     if (user?.id) loadGoals(user.id);
   }, [user?.id, loadGoals]);
 
-  const summary = useMemo(() => getSummary(), [getSummary]);
-
-  const { avgDailyProfit, avgProfitPerOrder } = useMemo(() => {
-    const logProfit = financialLogs.length > 0
-      ? financialLogs.reduce((acc, l) => {
-          const profit = (l.revenue || 0) - ((l.cogs || 0) + (l.shippingCost || 0) + (l.amazonFees || 0) + (l.adSpend || 0));
-          return acc + profit;
-        }, 0) / financialLogs.length
-      : (summary.netProfit || 0) / 30;
-    const perOrder = (summary.ordersCount !== null && summary.ordersCount > 0 && summary.netProfit !== null) 
-      ? summary.netProfit / summary.ordersCount 
-      : 0;
-    return { avgDailyProfit: logProfit, avgProfitPerOrder: perOrder };
-  }, [financialLogs, summary]);
+  const avgDailyProfit = planningContext?.averageDailyProfit ?? 0;
+  const avgProfitPerOrder = planningContext?.averageProfitPerOrder ?? 0;
 
   const activeGoals = useMemo(() => goals.filter((g) => !g.is_completed), [goals]);
   const completedGoals = useMemo(() => goals.filter((g) => g.is_completed), [goals]);
@@ -166,9 +151,10 @@ export default function GoalsPage() {
   };
 
   const handleComplete = async (goal: Goal) => {
-    await completeGoal(goal.id);
-    setCelebrationGoal(goal.name);
-    setConfettiActive(true);
+    if (await completeGoal(goal.id)) {
+      setCelebrationGoal(goal.name);
+      setConfettiActive(true);
+    }
   };
 
   const handleAddSavings = async () => {
@@ -177,12 +163,17 @@ export default function GoalsPage() {
     if (isNaN(amount) || amount <= 0) return;
     const { goal } = addSavingsModal;
     const newSavings = Math.min(goal.current_savings + amount, goal.target_amount);
-    await updateGoal(goal.id, { current_savings: newSavings });
-    if (newSavings >= goal.target_amount) {
+    const saved = await updateGoal(goal.id, { current_savings: newSavings });
+    if (saved && newSavings >= goal.target_amount) {
       setCelebrationGoal(goal.name);
       setConfettiActive(true);
     }
-    setAddSavingsModal(null);
+    if (saved) setAddSavingsModal(null);
+  };
+
+  const handleDelete = async (goal: Goal) => {
+    if (!window.confirm(`Delete the goal “${goal.name}”? This removes it from your active goal history.`)) return;
+    await deleteGoal(goal.id);
   };
 
   const colorConfig = (color: string) =>
@@ -224,6 +215,15 @@ export default function GoalsPage() {
           <Plus className="w-4 h-4" /> New Goal
         </button>
       </div>
+
+      {planningContext && !planningContext.available && (
+        <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3">
+          <p className="text-xs font-semibold text-amber-300">Profit-based completion forecasts are unavailable.</p>
+          <p className="mt-1 text-[11px] text-zinc-400">
+            {planningContext.limitations.join(" ")} SellerPlus will not treat missing costs or ad spend as zero.
+          </p>
+        </div>
+      )}
 
       {/* Top Goal Banner */}
       {topGoal && (() => {
@@ -462,7 +462,7 @@ export default function GoalsPage() {
                       <CheckCircle2 className="w-3.5 h-3.5" />
                     </button>
                     <button
-                      onClick={() => deleteGoal(goal.id)}
+                      onClick={() => handleDelete(goal)}
                       className="h-8 px-3 rounded-lg border border-red-500/20 text-red-400 hover:bg-red-500/10 text-[11px] font-bold transition-all"
                       title="Delete goal"
                     >
@@ -499,7 +499,7 @@ export default function GoalsPage() {
                   <p className="text-sm font-bold text-white truncate">{goal.name}</p>
                   <p className="text-[10px] text-emerald-400">{formatCurrency(goal.target_amount)} achieved 🎉</p>
                 </div>
-                <button onClick={() => deleteGoal(goal.id)} className="text-zinc-600 hover:text-red-400 transition-colors">
+                <button onClick={() => handleDelete(goal)} className="text-zinc-600 hover:text-red-400 transition-colors">
                   <Trash2 className="w-3.5 h-3.5" />
                 </button>
               </div>

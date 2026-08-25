@@ -1,16 +1,5 @@
-/**
- * SellerPlus OS — BI Repository Layer
- *
- * Fetches aggregated business data using SQL-level aggregations.
- * All summaries are computed in PostgreSQL — NOT in JavaScript.
- * This avoids loading thousands of rows into Node.js memory.
- *
- * Security: All queries use an explicit userId filter enforced
- * at the SQL level. The admin client is used only here (server-side
- * worker context) and userId is required — never optional.
- */
-
-import { getAdminClient } from "@/lib/auth-middleware";
+import { z } from "zod";
+import { getAdminClient } from "@/lib/supabase/admin";
 
 export interface AdsSummary {
   totalSpend: number;
@@ -19,6 +8,11 @@ export interface AdsSummary {
   totalClicks: number;
   campaignCount: number;
   activeCampaignCount: number;
+  dataAvailable: boolean;
+  earliestDate: string | null;
+  latestDate: string | null;
+  sourceUpdatedAt: string | null;
+  dataSource: "amazon_ads_api_v3_daily";
 }
 
 export interface OrdersSummary {
@@ -28,209 +22,107 @@ export interface OrdersSummary {
   totalFbaFees: number;
   totalShippingCost: number;
   orderStatusCounts: Record<string, number>;
+  totalNetProfit: number | null;
+  profitCoverage: number;
+  topProduct: { sku: string; title: string; units: number; revenue: number } | null;
+  sourceUpdatedAt: string | null;
+  dataSource: "amazon_sp_api";
 }
 
 export interface InventorySummary {
   totalItems: number;
   lowStockItems: number;
   outOfStockItems: number;
+  sourceUpdatedAt: string | null;
+  dataSource: "amazon_sp_api_report";
 }
 
 export interface CogsSummary {
-  totalCogs: number;
+  totalCogs: number | null;
   listingsWithCostProfile: number;
+  coveredUnits: number;
+  totalUnits: number;
+  coverage: number;
+  dataSource: "seller_entered_cost_profiles";
 }
 
+export interface BusinessSummary {
+  dataWindow: { since: string; until: string };
+  ads: AdsSummary;
+  orders: OrdersSummary;
+  inventory: InventorySummary;
+  cogs: CogsSummary;
+}
+
+const finite = z.coerce.number().finite().default(0);
+const summarySchema = z.object({
+  dataWindow: z.object({ since: z.string(), until: z.string() }),
+  ads: z.object({
+    totalSpend: finite,
+    totalSales: finite,
+    totalImpressions: finite,
+    totalClicks: finite,
+    campaignCount: finite,
+    activeCampaignCount: finite,
+    dataAvailable: z.boolean().default(false),
+    earliestDate: z.string().nullable().default(null),
+    latestDate: z.string().nullable().default(null),
+    sourceUpdatedAt: z.string().nullable().default(null),
+    dataSource: z.literal("amazon_ads_api_v3_daily"),
+  }),
+  orders: z.object({
+    totalRevenue: finite,
+    totalOrders: finite,
+    totalCommissionFees: finite,
+    totalFbaFees: finite,
+    totalShippingCost: finite,
+    orderStatusCounts: z.record(z.coerce.number().finite()).default({}),
+    totalNetProfit: z.coerce.number().finite().nullable().default(null),
+    profitCoverage: finite,
+    topProduct: z.object({ sku: z.string(), title: z.string(), units: finite, revenue: finite }).nullable().default(null),
+    sourceUpdatedAt: z.string().nullable().default(null),
+    dataSource: z.literal("amazon_sp_api"),
+  }),
+  inventory: z.object({
+    totalItems: finite,
+    lowStockItems: finite,
+    outOfStockItems: finite,
+    sourceUpdatedAt: z.string().nullable().default(null),
+    dataSource: z.literal("amazon_sp_api_report"),
+  }),
+  cogs: z.object({
+    totalCogs: z.coerce.number().finite().nullable().default(null),
+    listingsWithCostProfile: finite,
+    coveredUnits: finite,
+    totalUnits: finite,
+    coverage: finite,
+    dataSource: z.literal("seller_entered_cost_profiles"),
+  }),
+});
+
+/**
+ * Reads a single PostgreSQL aggregation result. No raw order, listing, or
+ * campaign collections cross the application boundary as tenant data grows.
+ */
 export class BIRepository {
-  /**
-   * Fetches 30-day ads summary using SQL aggregations.
-   * Applies a 30-day date filter on created_at/updated_at.
-   * Zero row-level data is loaded into Node.js memory.
-   */
-  static async getAdsSummary(userId: string): Promise<AdsSummary> {
-    if (!userId) throw new Error("BIRepository.getAdsSummary: userId is required");
-
-    const adminClient = getAdminClient();
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-
-    // SQL aggregation — single query returns pre-summed values
-    // FIX: Apply the 30-day date filter that was computed but not used
-    const { data, error } = await adminClient
-      .from("advertising_campaigns")
-      .select("spend, sales, impressions, clicks, status")
-      .eq("user_id", userId)
-      .gte("updated_at", thirtyDaysAgo.toISOString());
-
-    if (error) throw new Error(`BIRepository.getAdsSummary failed: ${error.message}`);
-
-    const campaigns = data || [];
-    let totalSpend = 0;
-    let totalSales = 0;
-    let totalImpressions = 0;
-    let totalClicks = 0;
-    let activeCampaignCount = 0;
-
-    // Kept as JS loop intentionally — Supabase JS client does not expose
-    // SQL aggregate syntax cleanly. The key fix is: we select only the 4
-    // needed numeric columns (not SELECT *), reducing payload by ~80%.
-    for (const c of campaigns) {
-      totalSpend += Number(c.spend) || 0;
-      totalSales += Number(c.sales) || 0;
-      totalImpressions += Number(c.impressions) || 0;
-      totalClicks += Number(c.clicks) || 0;
-      if (c.status === "ENABLED" || c.status === "active") activeCampaignCount++;
+  static async getBusinessSummary(
+    workspaceId: string,
+    since = new Date(Date.now() - 30 * 86_400_000),
+    until = new Date(),
+  ): Promise<BusinessSummary> {
+    if (!workspaceId) throw new Error("BIRepository.getBusinessSummary: workspaceId is required");
+    if (Number.isNaN(since.getTime()) || Number.isNaN(until.getTime()) || since >= until) {
+      throw new Error("BIRepository.getBusinessSummary: a valid data window is required");
     }
-
-    return {
-      totalSpend,
-      totalSales,
-      totalImpressions,
-      totalClicks,
-      campaignCount: campaigns.length,
-      activeCampaignCount,
-    };
-  }
-
-  /**
-   * Fetches 30-day orders summary using SQL aggregations.
-   * Now includes commission fees, FBA fees, and shipping costs for accurate profit calculation.
-   */
-  static async getOrdersSummary(userId: string): Promise<OrdersSummary> {
-    if (!userId) throw new Error("BIRepository.getOrdersSummary: userId is required");
-
-    const adminClient = getAdminClient();
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-
-    const { data, error } = await adminClient
-      .from("orders")
-      .select("total_amount, status, commission_fees, fba_fees, shipping_cost")
-      .eq("user_id", userId)
-      .gte("purchase_date", thirtyDaysAgo.toISOString());
-
-    if (error) throw new Error(`BIRepository.getOrdersSummary failed: ${error.message}`);
-
-    const orders = data || [];
-    let totalRevenue = 0;
-    let totalCommissionFees = 0;
-    let totalFbaFees = 0;
-    let totalShippingCost = 0;
-    const orderStatusCounts: Record<string, number> = {};
-
-    for (const o of orders) {
-      totalRevenue += Number(o.total_amount) || 0;
-      totalCommissionFees += Number(o.commission_fees) || 0;
-      totalFbaFees += Number(o.fba_fees) || 0;
-      totalShippingCost += Number(o.shipping_cost) || 0;
-      orderStatusCounts[o.status] = (orderStatusCounts[o.status] || 0) + 1;
+    if (until.getTime() - since.getTime() > 366 * 86_400_000) {
+      throw new Error("BIRepository.getBusinessSummary: data windows are limited to 366 days");
     }
-
-    return {
-      totalRevenue,
-      totalOrders: orders.length,
-      totalCommissionFees,
-      totalFbaFees,
-      totalShippingCost,
-      orderStatusCounts,
-    };
-  }
-
-  /**
-   * Fetches total COGS from cost_profiles linked to active listings.
-   * Uses sales_30d * unit_cost for each listing that has a cost profile.
-   */
-  static async getCogsSummary(userId: string): Promise<CogsSummary> {
-    if (!userId) throw new Error("BIRepository.getCogsSummary: userId is required");
-
-    const adminClient = getAdminClient();
-
-    // Fetch active listings that have a cost profile linked
-    const { data: listings, error: listingError } = await adminClient
-      .from("listings")
-      .select("sales_30d, cost_profile_id")
-      .eq("user_id", userId)
-      .eq("status", "active")
-      .not("cost_profile_id", "is", null);
-
-    if (listingError) throw new Error(`BIRepository.getCogsSummary: listings fetch failed: ${listingError.message}`);
-
-    const listingsWithProfile = listings || [];
-    if (listingsWithProfile.length === 0) {
-      return { totalCogs: 0, listingsWithCostProfile: 0 };
-    }
-
-    // Collect unique cost_profile_ids
-    const profileIds = [...new Set(listingsWithProfile.map((l) => l.cost_profile_id).filter(Boolean))];
-
-    const { data: profiles, error: profileError } = await adminClient
-      .from("cost_profiles")
-      .select("id, printing_cost, material_cost, packaging_cost, shipping_cost, labor_cost, misc_cost")
-      .in("id", profileIds)
-      .eq("user_id", userId);
-
-    if (profileError) throw new Error(`BIRepository.getCogsSummary: profiles fetch failed: ${profileError.message}`);
-
-    // Build profile map
-    const profileMap = new Map<string, number>();
-    for (const p of profiles || []) {
-      const unitCost =
-        (Number(p.printing_cost) || 0) +
-        (Number(p.material_cost) || 0) +
-        (Number(p.packaging_cost) || 0) +
-        (Number(p.shipping_cost) || 0) +
-        (Number(p.labor_cost) || 0) +
-        (Number(p.misc_cost) || 0);
-      profileMap.set(p.id, unitCost);
-    }
-
-    // Calculate total COGS: sum(sales_30d * unit_cost) across listings
-    let totalCogs = 0;
-    for (const listing of listingsWithProfile) {
-      const unitCost = profileMap.get(listing.cost_profile_id) || 0;
-      const sales30d = Number(listing.sales_30d) || 0;
-      totalCogs += unitCost * sales30d;
-    }
-
-    return {
-      totalCogs,
-      listingsWithCostProfile: listingsWithProfile.length,
-    };
-  }
-
-  /**
-   * Fetches inventory summary.
-   * Only selects available_qty and status columns from listings — no full row fetch.
-   */
-  static async getInventorySummary(userId: string): Promise<InventorySummary> {
-    if (!userId) throw new Error("BIRepository.getInventorySummary: userId is required");
-
-    const adminClient = getAdminClient();
-
-    const { data, error } = await adminClient
-      .from("listings")
-      .select("available_qty, status")
-      .eq("user_id", userId);
-
-    if (error) throw new Error(`BIRepository.getInventorySummary failed: ${error.message}`);
-
-    const items = data || [];
-    let lowStockItems = 0;
-    let outOfStockItems = 0;
-    let activeItemsCount = 0;
-
-    for (const i of items) {
-      if (i.status !== "active") continue;
-      activeItemsCount++;
-      const qty = Number(i.available_qty) || 0;
-      if (qty === 0) outOfStockItems++;
-      else if (qty < 20) lowStockItems++;
-    }
-
-    return {
-      totalItems: activeItemsCount,
-      lowStockItems,
-      outOfStockItems,
-    };
+    const { data, error } = await getAdminClient().rpc("get_workspace_bi_summary_range", {
+      p_workspace_id: workspaceId,
+      p_since: since.toISOString(),
+      p_until: until.toISOString(),
+    });
+    if (error) throw new Error(`Business summary unavailable: ${error.message}`);
+    return summarySchema.parse(data) as BusinessSummary;
   }
 }

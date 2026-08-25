@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useMemo } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { useOrdersAnalytics, OrderRecord, OrderItemWithProduct } from "@/hooks/use-orders-analytics";
 import { GlassCard } from "@/components/glass-card";
@@ -9,13 +9,37 @@ import {
   ChevronRight, RefreshCw, Download, FileText, Printer, FileJson, X, 
   HelpCircle, Eye, CheckCircle, Package, AlertTriangle, ArrowUpDown
 } from "lucide-react";
-import { supabase } from "@/lib/supabase";
+import { sellerplusApiFetch } from "@/lib/client/api-fetch";
 import { cn, formatCurrency } from "@/lib/utils";
 import { useToastStore } from "@/hooks/use-toast-store";
+import { createCsv } from "@/lib/csv";
+import { createXlsx } from "@/lib/xlsx";
+
+function marketplaceId(value: string): string | undefined {
+  if (value === "IN") return "A21TJRUUN4KGV";
+  if (value === "US") return "ATVPDKIKX0DER";
+  if (value === "UK") return "A1F83G8C2ARO7P";
+  return undefined;
+}
+
+function marketplaceLabel(value: string | null): string {
+  if (value === "A21TJRUUN4KGV") return "IN";
+  if (value === "ATVPDKIKX0DER") return "US";
+  if (value === "A1F83G8C2ARO7P") return "UK";
+  return value ?? "—";
+}
+
+function deliveryProgress(status: string): number {
+  const normalized = status.toLowerCase();
+  if (normalized === "delivered") return 100;
+  if (normalized.includes("shipped")) return 75;
+  if (normalized === "packed") return 50;
+  if (normalized.includes("cancel")) return 0;
+  return 25;
+}
 
 export default function RedesignedOrdersPage() {
   const user = useAuth((s) => s.user);
-  const { analytics, loading, refetch } = useOrdersAnalytics(user?.id);
 
   // States
   const [searchTerm, setSearchTerm] = useState("");
@@ -26,6 +50,8 @@ export default function RedesignedOrdersPage() {
   const [customEndDate, setCustomEndDate] = useState("");
   const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 50;
 
   // Drawer details drawer state
   const [drawerOrder, setDrawerOrder] = useState<OrderRecord | null>(null);
@@ -37,89 +63,29 @@ export default function RedesignedOrdersPage() {
   const [sortField, setSortField] = useState<"purchase_date" | "total_amount">("purchase_date");
   const [sortAsc, setSortAsc] = useState(false);
 
-  // Filter orders
-  const filteredOrders = useMemo(() => {
-    let list = [...(analytics.recentOrders || [])];
+  const dateRange = useMemo(() => {
+    const end = datePreset === "custom" && customEndDate
+      ? new Date(`${customEndDate}T23:59:59.999`).toISOString()
+      : new Date().toISOString();
+    const endTime = new Date(end).getTime();
+    if (datePreset === "custom" && customStartDate) return { start: new Date(`${customStartDate}T00:00:00.000`).toISOString(), end };
+    const days = datePreset === "today" ? 1 : datePreset === "last_7d" ? 7 : datePreset === "last_365d" ? 365 : 30;
+    return { start: new Date(endTime - days * 86_400_000).toISOString(), end };
+  }, [datePreset, customStartDate, customEndDate]);
 
-    // Status filter
-    if (statusFilter !== "all") {
-      list = list.filter((o) => o.status.toLowerCase() === statusFilter.toLowerCase());
-    }
-
-    // Marketplace filter
-    if (marketplaceFilter !== "all") {
-      list = list.filter((o) => (o.marketplace_id || "US").includes(marketplaceFilter));
-    }
-
-    // Date range filter
-    const now = new Date();
-    let startDateLimit: Date | null = null;
-    
-    if (datePreset === "today") {
-      startDateLimit = new Date();
-      startDateLimit.setHours(0,0,0,0);
-    } else if (datePreset === "last_7d") {
-      startDateLimit = new Date();
-      startDateLimit.setDate(startDateLimit.getDate() - 7);
-    } else if (datePreset === "last_30d") {
-      startDateLimit = new Date();
-      startDateLimit.setDate(startDateLimit.getDate() - 30);
-    } else if (datePreset === "custom" && customStartDate) {
-      startDateLimit = new Date(customStartDate);
-    }
-
-    if (startDateLimit) {
-      list = list.filter((o) => {
-        if (!o.purchase_date) return false;
-        const d = new Date(o.purchase_date);
-        return d >= startDateLimit!;
-      });
-    }
-
-    if (datePreset === "custom" && customEndDate) {
-      const endDateLimit = new Date(customEndDate);
-      endDateLimit.setHours(23,59,59,999);
-      list = list.filter((o) => {
-        if (!o.purchase_date) return false;
-        const d = new Date(o.purchase_date);
-        return d <= endDateLimit;
-      });
-    }
-
-    // Keyword search
-    if (searchTerm.trim()) {
-      const q = searchTerm.toLowerCase();
-      list = list.filter((o) => {
-        const matchesOrderId = o.channel_order_id.toLowerCase().includes(q);
-        
-        // Find matching item details
-        const items = analytics.recentOrderItems.filter((i) => i.order_id === o.id);
-        const matchesSku = items.some((i) => i.seller_sku?.toLowerCase().includes(q));
-        const matchesAsin = items.some((i) => i.asin?.toLowerCase().includes(q));
-        const matchesTitle = items.some((i) => i.title?.toLowerCase().includes(q));
-
-        return matchesOrderId || matchesSku || matchesAsin || matchesTitle;
-      });
-    }
-
-    // Sort logic
-    list.sort((a, b) => {
-      let valA: any = a[sortField] || "";
-      let valB: any = b[sortField] || "";
-
-      if (sortField === "purchase_date") {
-        valA = valA ? new Date(valA).getTime() : 0;
-        valB = valB ? new Date(valB).getTime() : 0;
-      } else {
-        valA = Number(valA);
-        valB = Number(valB);
-      }
-
-      return sortAsc ? valA - valB : valB - valA;
-    });
-
-    return list;
-  }, [analytics.recentOrders, analytics.recentOrderItems, statusFilter, marketplaceFilter, datePreset, customStartDate, customEndDate, searchTerm, sortField, sortAsc]);
+  const { analytics, loading, error, lastSyncedAt, total, refetch } = useOrdersAnalytics(user?.id, {
+    page: currentPage,
+    pageSize,
+    search: searchTerm,
+    status: statusFilter === "all" ? undefined : statusFilter,
+    marketplace: marketplaceId(marketplaceFilter),
+    start: dateRange.start,
+    end: dateRange.end,
+    sort: sortField,
+    ascending: sortAsc,
+  });
+  const filteredOrders = analytics.recentOrders;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   // Bulk actions handlers
   const handleToggleSelectAll = () => {
@@ -138,31 +104,30 @@ export default function RedesignedOrdersPage() {
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
-    await refetch();
-    setIsRefreshing(false);
+    try {
+      const response = await sellerplusApiFetch("/api/amazon/sync-orders", {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Amazon order sync could not be queued.");
+      useToastStore.getState().success("Order sync queued", `Job ${payload.data.jobId} will run in the durable worker queue.`);
+      await refetch();
+    } catch (caught) {
+      useToastStore.getState().error("Sync not queued", caught instanceof Error ? caught.message : "Try again later.");
+    } finally {
+      setIsRefreshing(false);
+    }
   };
 
   // Drawer opener
   const handleOpenDrawer = async (order: OrderRecord) => {
     setDrawerOrder(order);
     setDrawerLoading(true);
-    setCustomNote("");
+    setCustomNote(order.notes ?? "");
     try {
-      // Find matching items from analytics local copy
       const items = analytics.recentOrderItems.filter((i) => i.order_id === order.id);
       setDrawerItems(items);
-
-      // Load custom notes from Supabase metadata if exists
-      const { data } = await supabase
-        .from("orders")
-        .select("notes")
-        .eq("id", order.id)
-        .maybeSingle();
-      if (data?.notes) {
-        setCustomNote(data.notes);
-      }
-    } catch (e) {
-      console.error(e);
     } finally {
       setDrawerLoading(false);
     }
@@ -171,11 +136,15 @@ export default function RedesignedOrdersPage() {
   const handleSaveNotes = async () => {
     if (!drawerOrder) return;
     try {
-      await supabase
-        .from("orders")
-        .update({ notes: customNote })
-        .eq("id", drawerOrder.id);
+      const response = await sellerplusApiFetch(`/api/orders/${drawerOrder.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ notes: customNote, expectedVersion: drawerOrder.version }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Notes could not be saved.");
+      setDrawerOrder((current) => current ? { ...current, notes: payload.data.notes, version: Number(payload.data.version) } : current);
       useToastStore.getState().success("Notes Saved");
+      await refetch();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Unknown error";
       useToastStore.getState().error("Save Failed", msg);
@@ -203,9 +172,7 @@ export default function RedesignedOrdersPage() {
       downloadAnchor.remove();
     } else if (format === "csv" || format === "excel") {
       const headers = ["Order ID", "Purchase Date", "Status", "Total Amount", "Currency", "Fulfillment", "Marketplace", "Items Shipped"];
-      const csvRows = [headers.join(",")];
-      list.forEach((o) => {
-        csvRows.push([
+      const rows = list.map((o) => [
           o.channel_order_id,
           o.purchase_date ? new Date(o.purchase_date).toLocaleDateString() : "",
           o.status,
@@ -214,15 +181,24 @@ export default function RedesignedOrdersPage() {
           o.fulfillment_channel || "Merchant",
           o.marketplace_id || "US",
           o.number_of_items_shipped
-        ].join(","));
-      });
-      const dataStr = "data:text/csv;charset=utf-8," + encodeURIComponent(csvRows.join("\n"));
+        ]);
       const downloadAnchor = document.createElement("a");
-      downloadAnchor.setAttribute("href", dataStr);
-      downloadAnchor.setAttribute("download", `sellerplus_orders_report.csv`);
+      let objectUrl: string | null = null;
+      if (format === "excel") {
+        const workbook = createXlsx(headers, rows, "SellerPlus Orders");
+        const buffer = new ArrayBuffer(workbook.byteLength);
+        new Uint8Array(buffer).set(workbook);
+        objectUrl = URL.createObjectURL(new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+        downloadAnchor.href = objectUrl;
+        downloadAnchor.download = "sellerplus_orders_report.xlsx";
+      } else {
+        downloadAnchor.href = "data:text/csv;charset=utf-8," + encodeURIComponent(createCsv(headers, rows));
+        downloadAnchor.download = "sellerplus_orders_report.csv";
+      }
       document.body.appendChild(downloadAnchor);
       downloadAnchor.click();
       downloadAnchor.remove();
+      if (objectUrl) window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
     } else if (format === "pdf") {
       window.print();
     }
@@ -238,8 +214,9 @@ export default function RedesignedOrdersPage() {
             Manage Orders
           </h1>
           <p className="text-zinc-400 text-sm mt-1">
-            Redesigned order ledgers matching Seller Central workflows. Synced in real-time from SP-API.
+            Tenant-scoped Amazon order data with incremental SP-API synchronization and durable background jobs.
           </p>
+          <p className="text-zinc-600 text-[10px] mt-1">Last successful sync: {lastSyncedAt ? new Date(lastSyncedAt).toLocaleString() : "Not yet synchronized"}</p>
         </div>
 
         <div className="flex items-center gap-2">
@@ -249,7 +226,7 @@ export default function RedesignedOrdersPage() {
             className="h-9 px-3 rounded-lg border border-white/10 bg-white/[0.02] hover:bg-white/5 text-zinc-300 text-xs font-bold transition-all flex items-center gap-1.5"
           >
             <RefreshCw className={cn("w-3.5 h-3.5", isRefreshing && "animate-spin")} />
-            Sync Orders
+            Queue Amazon Sync
           </button>
           <button
             onClick={() => triggerExport("pdf")}
@@ -264,7 +241,8 @@ export default function RedesignedOrdersPage() {
               <Download className="w-3.5 h-3.5" /> Export Selected ({selectedOrderIds.length})
             </button>
             <div className="absolute right-0 top-full mt-1.5 w-40 bg-[#121216] border border-white/10 rounded-lg shadow-xl hidden group-hover:block z-30 overflow-hidden">
-              <button onClick={() => triggerExport("csv")} className="w-full px-3 py-2 text-left text-zinc-300 hover:bg-white/5 hover:text-white text-xs flex items-center gap-2"><FileText className="w-3.5 h-3.5" /> CSV/Excel</button>
+              <button onClick={() => triggerExport("csv")} className="w-full px-3 py-2 text-left text-zinc-300 hover:bg-white/5 hover:text-white text-xs flex items-center gap-2"><FileText className="w-3.5 h-3.5" /> CSV</button>
+              <button onClick={() => triggerExport("excel")} className="w-full px-3 py-2 text-left text-zinc-300 hover:bg-white/5 hover:text-white text-xs flex items-center gap-2"><FileText className="w-3.5 h-3.5" /> Excel (.xlsx)</button>
               <button onClick={() => triggerExport("json")} className="w-full px-3 py-2 text-left text-zinc-300 hover:bg-white/5 hover:text-white text-xs flex items-center gap-2"><FileJson className="w-3.5 h-3.5" /> JSON format</button>
             </div>
           </div>
@@ -280,7 +258,7 @@ export default function RedesignedOrdersPage() {
             type="text"
             placeholder="Search Order ID, SKU, ASIN, Title..."
             value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
+            onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
             className="flex-1 bg-transparent text-xs text-white placeholder-zinc-500 focus:outline-none"
           />
         </div>
@@ -292,7 +270,7 @@ export default function RedesignedOrdersPage() {
             <span className="text-[10px] text-zinc-500 uppercase font-bold">Status</span>
             <select
               value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
+              onChange={(e) => { setStatusFilter(e.target.value); setCurrentPage(1); }}
               className="h-8 rounded-lg border border-white/10 bg-[#161719] text-xs text-zinc-300 px-2.5 focus:outline-none"
             >
               <option value="all">All Statuses</option>
@@ -308,7 +286,7 @@ export default function RedesignedOrdersPage() {
             <span className="text-[10px] text-zinc-500 uppercase font-bold">Marketplace</span>
             <select
               value={marketplaceFilter}
-              onChange={(e) => setMarketplaceFilter(e.target.value)}
+              onChange={(e) => { setMarketplaceFilter(e.target.value); setCurrentPage(1); }}
               className="h-8 rounded-lg border border-white/10 bg-[#161719] text-xs text-zinc-300 px-2.5 focus:outline-none"
             >
               <option value="all">All Markets</option>
@@ -323,10 +301,10 @@ export default function RedesignedOrdersPage() {
             <span className="text-[10px] text-zinc-500 uppercase font-bold">Date</span>
             <select
               value={datePreset}
-              onChange={(e) => setDatePreset(e.target.value)}
+              onChange={(e) => { setDatePreset(e.target.value); setCurrentPage(1); }}
               className="h-8 rounded-lg border border-white/10 bg-[#161719] text-xs text-zinc-300 px-2.5 focus:outline-none"
             >
-              <option value="all">Lifetime</option>
+              <option value="last_365d">Last 365 Days</option>
               <option value="today">Today</option>
               <option value="last_7d">Last 7 Days</option>
               <option value="last_30d">Last 30 Days</option>
@@ -341,14 +319,14 @@ export default function RedesignedOrdersPage() {
             <input
               type="date"
               value={customStartDate}
-              onChange={(e) => setCustomStartDate(e.target.value)}
+              onChange={(e) => { setCustomStartDate(e.target.value); setCurrentPage(1); }}
               className="h-8 rounded-lg border border-white/10 bg-[#161719] text-xs text-zinc-300 px-2"
             />
             <span className="text-zinc-500 text-xs">to</span>
             <input
               type="date"
               value={customEndDate}
-              onChange={(e) => setCustomEndDate(e.target.value)}
+              onChange={(e) => { setCustomEndDate(e.target.value); setCurrentPage(1); }}
               className="h-8 rounded-lg border border-white/10 bg-[#161719] text-xs text-zinc-300 px-2"
             />
           </div>
@@ -357,10 +335,15 @@ export default function RedesignedOrdersPage() {
 
       {/* Main Table layout */}
       <GlassCard className="overflow-hidden">
-        {loading ? (
+        {error ? (
+          <div className="h-48 flex flex-col items-center justify-center gap-2 px-6 text-center">
+            <AlertTriangle className="w-6 h-6 text-amber-400" />
+            <span className="text-sm text-zinc-300">{error}</span>
+          </div>
+        ) : loading ? (
           <div className="h-64 flex flex-col items-center justify-center gap-2">
             <div className="w-6 h-6 border-t-2 border-[#00c48c] border-solid rounded-full animate-spin" />
-            <span className="text-xs text-zinc-500 font-bold uppercase tracking-wider">Syncing database registers...</span>
+            <span className="text-xs text-zinc-500 font-bold uppercase tracking-wider">Loading tenant order index...</span>
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -375,7 +358,7 @@ export default function RedesignedOrdersPage() {
                       {selectedOrderIds.length === filteredOrders.length && filteredOrders.length > 0 && "✓"}
                     </button>
                   </th>
-                  <th onClick={() => { setSortField("purchase_date"); setSortAsc(!sortAsc); }} className="cursor-pointer hover:text-white transition-colors">
+                  <th onClick={() => { setSortField("purchase_date"); setSortAsc(!sortAsc); setCurrentPage(1); }} className="cursor-pointer hover:text-white transition-colors">
                     Order ID / Purchase Date <ArrowUpDown className="w-2.5 h-2.5 inline ml-1" />
                   </th>
                   <th>Market</th>
@@ -383,7 +366,7 @@ export default function RedesignedOrdersPage() {
                   <th>Sku / Asin</th>
                   <th>Fulfillment</th>
                   <th>Qty</th>
-                  <th onClick={() => { setSortField("total_amount"); setSortAsc(!sortAsc); }} className="text-right cursor-pointer hover:text-white transition-colors">
+                  <th onClick={() => { setSortField("total_amount"); setSortAsc(!sortAsc); setCurrentPage(1); }} className="text-right cursor-pointer hover:text-white transition-colors">
                     Total Amount <ArrowUpDown className="w-2.5 h-2.5 inline ml-1" />
                   </th>
                   <th>Status</th>
@@ -422,7 +405,7 @@ export default function RedesignedOrdersPage() {
                         </td>
                         <td>
                           <span className="px-1.5 py-0.5 rounded text-[9px] font-bold border uppercase bg-zinc-500/10 text-zinc-400 border-zinc-500/20">
-                            {o.marketplace_id === "A21TJRUUN4KGV" ? "IN" : o.marketplace_id === "ATVPDKIKX0DER" ? "US" : "UK"}
+                            {marketplaceLabel(o.marketplace_id)}
                           </span>
                         </td>
                         <td className="max-w-[240px]">
@@ -456,7 +439,7 @@ export default function RedesignedOrdersPage() {
                           </span>
                         </td>
                         <td className="text-zinc-300 font-mono">
-                          {items.reduce((sum, i) => sum + Math.max(1, i.quantity_ordered), 0)}
+                          {items.reduce((sum, i) => sum + Math.max(0, i.quantity_ordered), 0)}
                         </td>
                         <td className="text-right text-white font-mono font-bold">
                           {formatCurrency(o.total_amount)}
@@ -487,6 +470,21 @@ export default function RedesignedOrdersPage() {
                 )}
               </tbody>
             </table>
+            <div className="flex items-center justify-between border-t border-white/5 px-4 py-3 print:hidden">
+              <span className="text-[10px] text-zinc-500">{total.toLocaleString("en-IN")} matching orders · Page {currentPage} of {totalPages}</span>
+              <div className="flex gap-2">
+                <button
+                  disabled={currentPage <= 1}
+                  onClick={() => { setCurrentPage((page) => Math.max(1, page - 1)); setSelectedOrderIds([]); }}
+                  className="h-8 px-3 rounded-lg border border-white/10 text-xs text-zinc-300 disabled:opacity-40"
+                >Previous</button>
+                <button
+                  disabled={currentPage >= totalPages}
+                  onClick={() => { setCurrentPage((page) => Math.min(totalPages, page + 1)); setSelectedOrderIds([]); }}
+                  className="h-8 px-3 rounded-lg border border-white/10 text-xs text-zinc-300 disabled:opacity-40"
+                >Next</button>
+              </div>
+            </div>
           </div>
         )}
       </GlassCard>
@@ -522,11 +520,11 @@ export default function RedesignedOrdersPage() {
                   <div className="p-3.5 rounded-xl border border-white/5 bg-white/[0.01] flex flex-col gap-2.5">
                     <span className="font-bold text-white uppercase text-[10px]">Delivery Tracker</span>
                     <div className="flex items-center justify-between text-[11px] font-semibold text-zinc-300">
-                      <span>Market: {drawerOrder.marketplace_id === "A21TJRUUN4KGV" ? "Amazon India (amazon.in)" : "Amazon US"}</span>
+                      <span>Marketplace: {marketplaceLabel(drawerOrder.marketplace_id)}</span>
                       <span className="text-[#00c48c]">{drawerOrder.status}</span>
                     </div>
                     <div className="w-full bg-white/5 h-1.5 rounded-full overflow-hidden mt-1.5">
-                      <div className="bg-[#00c48c] h-full rounded-full w-2/3 animate-pulse" />
+                      <div className="bg-[#00c48c] h-full rounded-full" style={{ width: `${deliveryProgress(drawerOrder.status)}%` }} />
                     </div>
                   </div>
 
@@ -584,21 +582,21 @@ export default function RedesignedOrdersPage() {
                         <span>{formatCurrency(drawerOrder.total_amount)}</span>
                       </div>
                       <div className="flex items-center justify-between text-red-400">
-                        <span>Amazon Commission (Est)</span>
-                        <span>-{formatCurrency(drawerOrder.commission_fees || 0)}</span>
+                        <span>Amazon Commission</span>
+                        <span>{drawerOrder.profit_calculation_status === "unavailable" ? "Unavailable" : `-${formatCurrency(drawerOrder.commission_fees ?? 0)}`}</span>
                       </div>
                       <div className="flex items-center justify-between text-red-400">
                         <span>FBA Fulfillment Fees</span>
-                        <span>-{formatCurrency(drawerOrder.fba_fees || 0)}</span>
+                        <span>{drawerOrder.profit_calculation_status === "unavailable" ? "Unavailable" : `-${formatCurrency(drawerOrder.fba_fees ?? 0)}`}</span>
                       </div>
                       <div className="flex items-center justify-between text-red-400">
                         <span>Fulfillment Shipping Cost</span>
-                        <span>-{formatCurrency(drawerOrder.shipping_cost || 0)}</span>
+                        <span>{drawerOrder.profit_calculation_status === "unavailable" ? "Unavailable" : `-${formatCurrency(drawerOrder.shipping_cost ?? 0)}`}</span>
                       </div>
                       <hr className="border-white/5" />
                       <div className="flex items-center justify-between font-bold text-white text-[13px]">
                         <span>Net Profit Yield</span>
-                        <span className="text-[#00c48c]">{formatCurrency(drawerOrder.net_profit || 0)}</span>
+                        <span className="text-[#00c48c]">{drawerOrder.profit_calculation_status === "complete" && drawerOrder.net_profit !== null ? formatCurrency(drawerOrder.net_profit) : "Unavailable"}</span>
                       </div>
                     </div>
                   </div>

@@ -56,37 +56,29 @@ export function WidgetRenderer({ widget }: { widget: Widget }) {
       );
 
     case "KPI":
-      const kpiValue = typeof widget.dataset?.value === "number" ? 
-        (widget.title.toLowerCase().includes("revenue") || widget.title.toLowerCase().includes("profit") ? formatCurrency(widget.dataset.value) : widget.dataset.value.toLocaleString()) 
-        : widget.dataset?.value;
+      const rawValue = widget.dataset.value;
+      const kpiValue = !widget.dataset.available || rawValue === null
+        ? null
+        : widget.dataset.format === "currency"
+          ? formatCurrency(rawValue)
+          : widget.dataset.format === "percent"
+            ? `${rawValue.toLocaleString(undefined, { maximumFractionDigits: 2 })}%`
+            : widget.dataset.format === "ratio"
+              ? rawValue.toLocaleString(undefined, { maximumFractionDigits: 2 })
+              : rawValue.toLocaleString();
         
       return (
         <Card>
           <CardHeader className="pb-2">
             <CardDescription className="font-medium text-muted-foreground">{widget.title}</CardDescription>
-            <CardTitle className="text-3xl">{kpiValue || "N/A"}</CardTitle>
+            <CardTitle className="text-3xl">{kpiValue ?? "Not available"}</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="text-xs text-muted-foreground">{widget.description}</div>
-            {widget.dataset?.trend && (
-              <div className={`text-xs font-medium mt-2 ${widget.dataset.trend > 0 ? 'text-green-600' : 'text-red-600'}`}>
-                {widget.dataset.trend > 0 ? "↑" : "↓"} {Math.abs(widget.dataset.trend)}% from last period
-              </div>
-            )}
+            <div className="mt-2 text-[10px] text-muted-foreground">Source: {widget.dataset.source}</div>
           </CardContent>
         </Card>
       );
 
-    default:
-      return (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm font-medium">{widget.title}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-sm text-muted-foreground">Unsupported widget type: {widget.type}</div>
-          </CardContent>
-        </Card>
-      );
   }
 }

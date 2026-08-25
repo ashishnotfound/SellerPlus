@@ -6,6 +6,8 @@ import { NotificationSettings } from "./components/NotificationSettings";
 import { LLMSettings } from "./components/LLMSettings";
 import { TeamSettings } from "./components/TeamSettings";
 import { AmazonAPISettings } from "./components/AmazonAPISettings";
+import { AboutSellerPlus } from "./components/AboutSellerPlus";
+import { AIBudgetSettings } from "./components/AIBudgetSettings";
 
 export default function SettingsPage() {
   return (
@@ -19,19 +21,22 @@ export default function SettingsPage() {
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-start">
-        {/* Left column: Profile, Team & Admin AI keys */}
+        {/* Workspace and personal settings */}
         <div className="xl:col-span-2 flex flex-col gap-6">
           <ProfileSettings />
           <TeamSettings />
-          <LLMSettings />
         </div>
         
-        {/* Right column: Notification Settings + Amazon API */}
+        {/* Product and notification settings */}
         <div className="flex flex-col gap-6">
           <NotificationSettings />
-          <AmazonAPISettings />
+          <AboutSellerPlus />
         </div>
       </div>
+
+      <LLMSettings />
+      <AIBudgetSettings />
+      <AmazonAPISettings />
     </div>
   );
 }

@@ -3,6 +3,8 @@
  * Handles message delivery to Discord webhooks, Telegram bots, and email (Resend).
  */
 
+import { escapeHtml } from "@/lib/html";
+
 export interface NotificationPayload {
   email?: string;
   discordUrl?: string;
@@ -10,6 +12,18 @@ export interface NotificationPayload {
   telegramChatId?: string;
   title: string;
   message: string;
+}
+
+function discordWebhookUrl(value: string): URL | null {
+  try {
+    const url = new URL(value);
+    const approvedHost = url.hostname === "discord.com" || url.hostname === "discordapp.com";
+    return url.protocol === "https:" && approvedHost && url.pathname.startsWith("/api/webhooks/")
+      ? url
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -23,11 +37,16 @@ export async function sendNotification(payload: NotificationPayload): Promise<{
   const results: any = {};
 
   // 1. Send to Discord Webhook
-  if (payload.discordUrl && payload.discordUrl.startsWith("http")) {
+  if (payload.discordUrl) {
+    const webhook = discordWebhookUrl(payload.discordUrl);
+    if (!webhook) {
+      results.discord = { success: false, error: "Discord webhook URL is not an approved Discord endpoint." };
+    } else {
     try {
-      const res = await fetch(payload.discordUrl, {
+      const res = await fetch(webhook, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(10_000),
         body: JSON.stringify({
           embeds: [{
             title: payload.title,
@@ -47,6 +66,7 @@ export async function sendNotification(payload: NotificationPayload): Promise<{
     } catch (e: any) {
       results.discord = { success: false, error: e.message };
     }
+    }
   }
 
   // 2. Send to Telegram
@@ -63,6 +83,7 @@ export async function sendNotification(payload: NotificationPayload): Promise<{
       const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(10_000),
         body: JSON.stringify({
           chat_id: payload.telegramChatId,
           text: formattedText,
@@ -95,14 +116,15 @@ export async function sendNotification(payload: NotificationPayload): Promise<{
           body: JSON.stringify({
             from: "SellerPlus OS <alerts@sellerplus.in>",
             to: [payload.email],
-            subject: payload.title,
+            subject: payload.title.slice(0, 200),
             html: `<div style="font-family: sans-serif; padding: 20px; color: #333; line-height: 1.5;">
-              <h2 style="color: #00c48c; margin-top: 0;">${payload.title}</h2>
-              <p style="white-space: pre-line;">${payload.message.replace(/\*(.*?)\*/g, "<strong>$1</strong>")}</p>
+              <h2 style="color: #00c48c; margin-top: 0;">${escapeHtml(payload.title)}</h2>
+              <p style="white-space: pre-line;">${escapeHtml(payload.message)}</p>
               <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;" />
               <p style="font-size: 11px; color: #999;">This alert was generated automatically by SellerPlus OS.</p>
             </div>`
-          })
+          }),
+          signal: AbortSignal.timeout(10_000),
         });
         
         if (res.ok) {
@@ -115,8 +137,10 @@ export async function sendNotification(payload: NotificationPayload): Promise<{
         results.email = { success: false, error: e.message };
       }
     } else {
-      console.log(`[Notification MOCK Email] To: ${payload.email} | Title: ${payload.title} | Message: ${payload.message}`);
-      results.email = { success: true, error: "Mock delivery (No RESEND_API_KEY set)" };
+      results.email = {
+        success: false,
+        error: "Email delivery is unavailable because RESEND_API_KEY is not configured.",
+      };
     }
   }
 

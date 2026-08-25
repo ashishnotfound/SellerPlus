@@ -15,8 +15,10 @@ import {
   KeywordCluster,
   KWInsight,
   KeywordRankResult,
-} from "@/lib/ai";
+} from "@/lib/ai/client";
 import { cn } from "@/lib/utils";
+import { createCsv } from "@/lib/csv";
+import { sellerplusApiFetch } from "@/lib/client/api-fetch";
 import {
   Search, Zap, TrendingUp, TrendingDown, Minus, AlertTriangle, CheckCircle,
   Lightbulb, Target, BarChart2, Hash, Download, Star, StarOff, BookOpen,
@@ -162,6 +164,7 @@ export default function AmazonKWPage() {
   // Related keywords state
   const [relatedLoading, setRelatedLoading] = useState(false);
   const [relatedKeywords, setRelatedKeywords] = useState<RelatedKeyword[] | null>(null);
+  const [relatedError, setRelatedError] = useState("");
   const [relatedFilter, setRelatedFilter] = useState<RelatedFilterType>("all");
   const [relatedSort, setRelatedSort] = useState<SortField>("opportunityScore");
   const [relatedSearch, setRelatedSearch] = useState("");
@@ -187,6 +190,7 @@ export default function AmazonKWPage() {
   const [clusterKeywordsInput, setClusterKeywordsInput] = useState("");
   const [clusterContext, setClusterContext] = useState("");
   const [clusterLoading, setClusterLoading] = useState(false);
+  const [clusterError, setClusterError] = useState("");
   const [clusters, setClusters] = useState<KeywordCluster[] | null>(null);
   const [expandedCluster, setExpandedCluster] = useState<string | null>(null);
 
@@ -198,6 +202,7 @@ export default function AmazonKWPage() {
   // Insights state
   const [insightsLoading, setInsightsLoading] = useState(false);
   const [insights, setInsights] = useState<KWInsight[] | null>(null);
+  const [insightsError, setInsightsError] = useState("");
 
   // Load recent searches from localStorage
   useEffect(() => {
@@ -236,26 +241,38 @@ export default function AmazonKWPage() {
     setActiveTab("research");
     saveRecent(query.trim());
 
-    const res = await deepResearchKeyword(query.trim(), marketplace);
-    if (res.success && res.data) {
-      setResearchData(res.data);
-      // Auto-load related keywords in background
-      loadRelated(query.trim());
-    } else {
-      setResearchError(res.error || "Research failed.");
+    try {
+      const res = await deepResearchKeyword(query.trim(), marketplace);
+      if (res.success && res.data) {
+        setResearchData(res.data);
+        void loadRelated(query.trim());
+      } else {
+        setResearchError(res.error || "Research failed.");
+      }
+    } catch (error) {
+      setResearchError(error instanceof Error ? error.message : "Keyword research is unavailable.");
+    } finally {
+      setResearchLoading(false);
     }
-    setResearchLoading(false);
   };
 
   const loadRelated = async (kw: string) => {
     setRelatedLoading(true);
+    setRelatedError("");
     try {
       let suggestions: string[] = [];
       try {
-        const autoRes = await fetch(`/api/amazon/autocomplete?q=${encodeURIComponent(kw)}&marketplace=${encodeURIComponent(marketplace)}`);
-        if (autoRes.ok) {
-          const autoData = await autoRes.json();
-          suggestions = autoData.suggestions || [];
+        const marketplaceCode = ({
+          "Amazon India": "IN",
+          "Amazon US": "US",
+          "Amazon UK": "UK",
+        } as const)[marketplace as "Amazon India" | "Amazon US" | "Amazon UK"];
+        if (marketplaceCode) {
+          const autoRes = await sellerplusApiFetch(`/api/amazon/autocomplete?q=${encodeURIComponent(kw)}&marketplace=${marketplaceCode}`);
+          if (autoRes.ok) {
+            const autoData = await autoRes.json();
+            suggestions = autoData.suggestions || [];
+          }
         }
       } catch (err) {
         console.error("Autocomplete fetch failed, falling back to pure AI", err);
@@ -263,24 +280,26 @@ export default function AmazonKWPage() {
 
       const data = await getRelatedKeywords(kw, category, marketplace, suggestions);
       setRelatedKeywords(data);
-    } catch {}
-    setRelatedLoading(false);
+    } catch (error) {
+      setRelatedKeywords(null);
+      setRelatedError(error instanceof Error ? error.message : "Related-keyword data is unavailable.");
+    } finally {
+      setRelatedLoading(false);
+    }
   };
 
   const fetchCatalogItemContext = async (asin: string) => {
     try {
-      const catRes = await fetch("/api/amazon/catalog", {
+      const catRes = await sellerplusApiFetch("/api/amazon/catalog", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           asin: asin.toUpperCase(),
-          region: marketplace
         })
       });
       if (catRes.ok) {
         const catData = await catRes.json();
-        if (catData.success) {
-          return `Title: ${catData.title}\nBrand: ${catData.brand}\nCategory: ${catData.category}\nDescription: ${catData.description}`;
+        if (catData.data) {
+          return `Title: ${catData.data.title}\nBrand: ${catData.data.brand}\nCategory: ${catData.data.category}\nDescription: ${catData.data.description}`;
         }
       }
     } catch (err) {
@@ -295,20 +314,22 @@ export default function AmazonKWPage() {
     setAsinError("");
     setAsinData(null);
 
-    const realContext = await fetchCatalogItemContext(asinInput.trim());
-    if (realContext) {
-      const titleLine = realContext.split("\n").find(line => line.startsWith("Title: ")) || "";
-      if (titleLine) {
-        setAsinProductContext(titleLine.replace("Title: ", "Real: "));
+    try {
+      const realContext = await fetchCatalogItemContext(asinInput.trim());
+      if (realContext) {
+        const titleLine = realContext.split("\n").find(line => line.startsWith("Title: ")) || "";
+        if (titleLine) setAsinProductContext(titleLine.replace("Title: ", ""));
       }
+
+      const contextToUse = realContext || asinProductContext.trim();
+      const res = await analyzeAsinKeywords(asinInput.trim().toUpperCase(), category, marketplace, contextToUse);
+      if (res.success && res.data) setAsinData(res.data);
+      else setAsinError(res.error || "ASIN analysis failed.");
+    } catch (error) {
+      setAsinError(error instanceof Error ? error.message : "ASIN analysis is unavailable.");
+    } finally {
+      setAsinLoading(false);
     }
-
-    const contextToUse = realContext || asinProductContext.trim();
-
-    const res = await analyzeAsinKeywords(asinInput.trim().toUpperCase(), category, marketplace, contextToUse);
-    if (res.success && res.data) setAsinData(res.data);
-    else setAsinError(res.error || "ASIN analysis failed.");
-    setAsinLoading(false);
   };
 
   const handleAsinTrack = async () => {
@@ -318,41 +339,52 @@ export default function AmazonKWPage() {
     setTrackResults(null);
     const kwList = trackKeywordsInput.split(/[,\n]+/).map(k => k.trim()).filter(Boolean);
 
-    const realContext = await fetchCatalogItemContext(asinInput.trim());
-    const contextToUse = realContext || asinProductContext.trim();
-
-    const res = await checkAsinKeywordRanks(asinInput.trim().toUpperCase(), kwList, category, marketplace, contextToUse);
-    if (res.success && res.data) {
-      setTrackResults(res.data);
-    } else {
-      setTrackError(res.error || "Rank check failed.");
+    try {
+      const realContext = await fetchCatalogItemContext(asinInput.trim());
+      const contextToUse = realContext || asinProductContext.trim();
+      const res = await checkAsinKeywordRanks(asinInput.trim().toUpperCase(), kwList, category, marketplace, contextToUse);
+      if (res.success && res.data) setTrackResults(res.data);
+      else setTrackError(res.error || "Rank check failed.");
+    } catch (error) {
+      setTrackError(error instanceof Error ? error.message : "Rank tracking is unavailable.");
+    } finally {
+      setTrackLoading(false);
     }
-    setTrackLoading(false);
   };
 
   const handleCluster = async () => {
     if (!clusterKeywordsInput.trim()) return;
     setClusterLoading(true);
+    setClusterError("");
     setClusters(null);
     const kwList = clusterKeywordsInput.split(/[,\n]+/).map(k => k.trim()).filter(Boolean);
     try {
       const data = await clusterKeywordList(kwList, clusterContext || "Amazon product");
       setClusters(data);
-    } catch {}
-    setClusterLoading(false);
+    } catch (error) {
+      setClusterError(error instanceof Error ? error.message : "Keyword clustering is unavailable.");
+    } finally {
+      setClusterLoading(false);
+    }
   };
 
   const handleInsights = async () => {
     if (!researchData) return;
     setInsightsLoading(true);
-    const data = await generateKwInsights(
-      researchData.keyword,
-      researchData,
-      relatedKeywords?.length || 0,
-      asinData ? 1 : 0
-    );
-    setInsights(data);
-    setInsightsLoading(false);
+    setInsightsError("");
+    try {
+      const data = await generateKwInsights(
+        researchData.keyword,
+        researchData,
+        relatedKeywords?.length || 0,
+        asinData ? 1 : 0
+      );
+      setInsights(data);
+    } catch (error) {
+      setInsightsError(error instanceof Error ? error.message : "Keyword insights are unavailable.");
+    } finally {
+      setInsightsLoading(false);
+    }
   };
 
   // ── Filtered & sorted related keywords ──
@@ -393,10 +425,11 @@ export default function AmazonKWPage() {
   const exportCSV = () => {
     if (!relatedKeywords) return;
     const headers = "Keyword,Type,Volume,Difficulty,CPC (₹),Opportunity Score,Intent,Trend,Seasonality";
-    const rows = filteredRelated.map(k =>
-      `"${k.keyword}","${k.type}",${k.searchVolume},${k.difficulty},${k.cpc},${k.opportunityScore},"${k.intent}","${k.trend}","${k.seasonality}"`
-    );
-    const csv = [headers, ...rows].join("\n");
+    const rows = filteredRelated.map(k => [
+      k.keyword, k.type, k.searchVolume, k.difficulty, k.cpc,
+      k.opportunityScore, k.intent, k.trend, k.seasonality,
+    ]);
+    const csv = createCsv(headers.split(","), rows);
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -408,7 +441,7 @@ export default function AmazonKWPage() {
 
   const monthLabels = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-  const hasSearched = !!researchData || researchLoading;
+  const hasSearched = !!researchData || researchLoading || !!researchError || activeTab !== "research";
 
   const tabs: { id: KWTab; label: string; icon: React.ReactNode }[] = [
     { id: "research", label: "Research", icon: <BarChart2 className="w-3.5 h-3.5" /> },
@@ -429,8 +462,8 @@ export default function AmazonKWPage() {
             <Zap className="w-4 h-4 text-[#00c48c]" />
           </div>
           <div>
-            <h1 className="text-xl font-bold tracking-tight text-white">Amazon KW™</h1>
-            <p className="text-zinc-600 text-xs">AI-powered keyword intelligence — research, cluster, compete, and rank.</p>
+            <h1 className="text-xl font-bold tracking-tight text-white">Keyword Intelligence</h1>
+            <p className="text-zinc-600 text-xs">SellerPlus keyword ideation and provider-backed Amazon metrics, with source transparency.</p>
           </div>
         </div>
 
@@ -489,16 +522,29 @@ export default function AmazonKWPage() {
         )}
       </div>
 
+      <div className="flex items-center gap-1 p-1 rounded-xl bg-[#161719] border border-white/[0.06] overflow-x-auto">
+        {tabs.map(tab => (
+          <button key={tab.id} onClick={() => setActiveTab(tab.id)}
+            className={cn(
+              "flex items-center gap-1.5 px-3 py-2 rounded-lg text-[11px] font-semibold whitespace-nowrap transition-all",
+              activeTab === tab.id ? "bg-[#00c48c] text-black" : "text-zinc-500 hover:text-zinc-200"
+            )}
+          >
+            {tab.icon} {tab.label}
+          </button>
+        ))}
+      </div>
+
       {/* ── Pre-search Empty State ── */}
       {!hasSearched && (
         <div className="grid grid-cols-3 gap-4">
           {[
-            { icon: <BarChart2 className="w-5 h-5 text-[#00c48c]" />, title: "16 Core Metrics", desc: "Volume, difficulty, CPC, buyer intent, conversion potential, seasonality, and more" },
-            { icon: <Layers className="w-5 h-5 text-sky-400" />, title: "35+ Related Keywords", desc: "Long-tail, synonyms, misspellings, AI-suggested hidden opportunities" },
-            { icon: <Hash className="w-5 h-5 text-violet-400" />, title: "Competitor ASIN Intel", desc: "Reverse-engineer any competitor's organic & sponsored keyword rankings" },
-            { icon: <Cpu className="w-5 h-5 text-amber-400" />, title: "AI Keyword Clusters", desc: "Automatic semantic grouping with placement recommendations" },
-            { icon: <Sparkles className="w-5 h-5 text-pink-400" />, title: "AI Insights™", desc: "Strategic recommendations explaining WHY each action matters" },
-            { icon: <BookOpen className="w-5 h-5 text-teal-400" />, title: "Saved Lists & Export", desc: "Organize keywords into projects, export CSV, CSV, or PDF" },
+            { icon: <BarChart2 className="w-5 h-5 text-[#00c48c]" />, title: "Verified Metrics Only", desc: "Volume, rank, CPC, and traffic appear only when backed by Amazon or a licensed data provider." },
+            { icon: <Layers className="w-5 h-5 text-sky-400" />, title: "Amazon Suggestions", desc: "Autocomplete suggestions are labeled separately from measured keyword performance." },
+            { icon: <Hash className="w-5 h-5 text-violet-400" />, title: "Catalog Context", desc: "Connected SP-API accounts can load verified ASIN title, brand, category, and description context." },
+            { icon: <Cpu className="w-5 h-5 text-amber-400" />, title: "Semantic Clusters", desc: "AI groups seller-provided keywords without inventing search volume or ranking claims." },
+            { icon: <Shield className="w-5 h-5 text-pink-400" />, title: "Fail-Closed Research", desc: "Unavailable providers produce a setup message, never synthetic marketplace measurements." },
+            { icon: <BookOpen className="w-5 h-5 text-teal-400" />, title: "Local Lists & CSV", desc: "Save working keyword lists in this browser and export them safely as CSV." },
           ].map((feat, i) => (
             <GlassCard key={i} className="flex flex-col gap-2 hover:border-white/10 transition-all">
               <div className="w-8 h-8 rounded-lg bg-white/[0.03] border border-white/[0.05] flex items-center justify-center mb-1">
@@ -514,20 +560,6 @@ export default function AmazonKWPage() {
       {/* ── Post-search: Tabs + Content ── */}
       {hasSearched && (
         <>
-          {/* Tab Navigation */}
-          <div className="flex items-center gap-1 p-1 rounded-xl bg-[#161719] border border-white/[0.06] overflow-x-auto">
-            {tabs.map(tab => (
-              <button key={tab.id} onClick={() => setActiveTab(tab.id)}
-                className={cn(
-                  "flex items-center gap-1.5 px-3 py-2 rounded-lg text-[11px] font-semibold whitespace-nowrap transition-all",
-                  activeTab === tab.id ? "bg-[#00c48c] text-black" : "text-zinc-500 hover:text-zinc-200"
-                )}
-              >
-                {tab.icon} {tab.label}
-              </button>
-            ))}
-          </div>
-
           {/* ════════════════════════════════════════════
               TAB 1 — RESEARCH
           ════════════════════════════════════════════ */}
@@ -538,7 +570,7 @@ export default function AmazonKWPage() {
                   <Loader2 className="w-7 h-7 text-[#00c48c] animate-spin" />
                   <div>
                     <p className="text-sm font-bold text-white">Analyzing "{query}"</p>
-                    <p className="text-xs text-zinc-600 mt-1">Running 16-metric keyword intelligence scan…</p>
+                    <p className="text-xs text-zinc-600 mt-1">Checking configured quantitative keyword data sources…</p>
                   </div>
                 </GlassCard>
               )}
@@ -694,7 +726,12 @@ export default function AmazonKWPage() {
               {relatedLoading && !relatedKeywords && (
                 <GlassCard className="h-40 flex flex-col items-center justify-center gap-3">
                   <Loader2 className="w-6 h-6 text-[#00c48c] animate-spin" />
-                  <p className="text-xs text-zinc-600">Generating 35+ related keywords…</p>
+                  <p className="text-xs text-zinc-600">Loading provider-backed related-keyword data…</p>
+                </GlassCard>
+              )}
+              {relatedError && (
+                <GlassCard className="border-rose-500/20 bg-rose-500/[0.03]">
+                  <p className="text-xs text-rose-400">{relatedError}</p>
                 </GlassCard>
               )}
 
@@ -1232,6 +1269,12 @@ export default function AmazonKWPage() {
                 </div>
               </GlassCard>
 
+              {clusterError && (
+                <GlassCard className="border-rose-500/20 bg-rose-500/[0.03]">
+                  <p className="text-xs text-rose-400">{clusterError}</p>
+                </GlassCard>
+              )}
+
               {clusters && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {clusters.map(cluster => {
@@ -1271,8 +1314,8 @@ export default function AmazonKWPage() {
                         </div>
 
                         <div className="flex items-center gap-3 text-[10px] text-zinc-600 border-t border-white/[0.05] pt-2.5 mb-2.5">
-                          <span>Avg Volume: <span className="text-zinc-400 font-mono">{cluster.avgVolume.toLocaleString()}</span></span>
-                          <span>Avg Difficulty: <span className={cn("font-mono", cluster.avgDifficulty > 60 ? "text-rose-400" : cluster.avgDifficulty > 35 ? "text-amber-400" : "text-[#00c48c]")}>{cluster.avgDifficulty}/100</span></span>
+                          <span>Avg Volume: <span className="text-zinc-400 font-mono">{cluster.avgVolume == null ? "N/A" : cluster.avgVolume.toLocaleString()}</span></span>
+                          <span>Avg Difficulty: <span className={cn("font-mono", cluster.avgDifficulty == null ? "text-zinc-500" : cluster.avgDifficulty > 60 ? "text-rose-400" : cluster.avgDifficulty > 35 ? "text-amber-400" : "text-[#00c48c]")}>{cluster.avgDifficulty == null ? "N/A" : `${cluster.avgDifficulty}/100`}</span></span>
                         </div>
 
                         {/* Placement badges */}
@@ -1318,7 +1361,7 @@ export default function AmazonKWPage() {
                     </button>
                     <button onClick={() => {
                       if (savedKeywords.length === 0) return;
-                      const csv = "Keyword\n" + savedKeywords.join("\n");
+                      const csv = createCsv(["Keyword"], savedKeywords.map((keyword) => [keyword]));
                       const blob = new Blob([csv], { type: "text/csv" });
                       const url = URL.createObjectURL(blob);
                       const a = document.createElement("a");
@@ -1424,6 +1467,12 @@ export default function AmazonKWPage() {
                 <GlassCard className="h-40 flex flex-col items-center justify-center gap-3">
                   <Loader2 className="w-6 h-6 text-[#00c48c] animate-spin" />
                   <p className="text-xs text-zinc-600">Generating expert AI insights…</p>
+                </GlassCard>
+              )}
+
+              {insightsError && (
+                <GlassCard className="border-rose-500/20 bg-rose-500/[0.03]">
+                  <p className="text-xs text-rose-400">{insightsError}</p>
                 </GlassCard>
               )}
 

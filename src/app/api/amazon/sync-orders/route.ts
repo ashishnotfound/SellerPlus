@@ -1,118 +1,96 @@
-/**
- * SellerPlus OS — Amazon Orders Sync API
- * 
- * Authenticated endpoint for syncing Amazon SP-API orders and FBA inventory.
- * Uses JWT-verified user identity — userId is never trusted from request body.
- */
-
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import {
-  authenticateWithDevFallback,
+  authenticate,
   authErrorResponse,
+  requirePermission,
 } from "@/lib/auth-middleware";
-import {
-  syncOrders,
-  syncFbaInventory,
-  type AmazonCredentials,
-} from "@/lib/amazon-sync-service";
-import { log } from "@/lib/logger";
+import { getAmazonMarketplaceAccount } from "@/lib/amazon/credentials";
+import { jobService } from "@/lib/jobs/job-service";
+
+const requestSchema = z.object({
+  marketplaceAccountId: z.string().uuid().optional(),
+  lastUpdatedAfter: z.string().datetime().optional(),
+  fullRebuild: z.boolean().default(false),
+}).strict();
 
 export async function POST(request: Request) {
   try {
-    let parsedBody: any = {};
-    try {
-      const text = await request.text();
-      if (text) parsedBody = JSON.parse(text);
-    } catch (e) {}
-
-    const { region, sandbox, userId: bodyUserId, lastUpdatedAfter, fullRebuild = false } = parsedBody;
-
-    // Authenticate: JWT in production, body userId in development
-    const { userId, supabaseAdmin } = await authenticateWithDevFallback(request, bodyUserId);
-
-    // Fetch credentials from DB securely
-    const { data: devCreds } = await supabaseAdmin
-      .from("amazon_developer_credentials")
-      .select("*")
-      .eq("user_id", userId)
-      .maybeSingle();
-
-    const clientId = devCreds?.sp_client_id || process.env.NEXT_PUBLIC_AMAZON_SP_CLIENT_ID;
-    const clientSecret = devCreds?.sp_client_secret || process.env.AMAZON_SP_CLIENT_SECRET;
-
-    const { data: userToken } = await supabaseAdmin
-      .from("amazon_user_tokens")
-      .select("refresh_token")
-      .eq("supabase_user_id", userId)
-      .eq("provider", "sp")
-      .maybeSingle();
-
-    const refreshToken = userToken?.refresh_token || devCreds?.sp_refresh_token;
-
-    if (!clientId || !clientSecret || !refreshToken) {
-      return NextResponse.json(
-        { error: "Missing required Amazon credentials." },
-        { status: 400 }
-      );
+    const actor = await authenticate(request);
+    requirePermission(actor, "order.manage");
+    const raw = await request.text();
+    const input = requestSchema.parse(raw ? JSON.parse(raw) : {});
+    const account = await getAmazonMarketplaceAccount(
+      actor.supabaseAdmin,
+      actor.workspaceId,
+      input.marketplaceAccountId,
+    );
+    if (!account.capabilities.includes("selling_partner")) {
+      return NextResponse.json({ error: "Amazon SP-API is not connected for this account.", code: "SP_API_NOT_CONNECTED" }, { status: 409 });
     }
 
-    const credentials: AmazonCredentials = {
-      clientId,
-      clientSecret,
-      refreshToken,
-      region: region || devCreds?.region || "India (amazon.in)",
-      sandbox: sandbox || false,
-    };
-
-    // Determine delta sync boundary:
-    // If fullRebuild is true, sync historical orders from 365 days ago.
-    // If lastUpdatedAfter is not provided, check the most recent order in the DB
-    let syncAfter = lastUpdatedAfter;
-    if (fullRebuild) {
-      syncAfter = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString();
-      log.info(`[SyncOrdersRoute] Full account rebuild requested. Syncing from: ${syncAfter}`);
-    } else if (!syncAfter) {
-      const { data: latestOrder } = await supabaseAdmin
-        .from("orders")
-        .select("last_update_date")
-        .eq("user_id", userId)
-        .eq("channel", "amazon")
-        .order("last_update_date", { ascending: false })
-        .limit(1)
+    let updatedAfter = input.lastUpdatedAfter;
+    if (!updatedAfter) {
+      const { data: checkpoint } = await actor.supabaseAdmin
+        .from("sync_checkpoints")
+        .select("cursor, last_succeeded_at")
+        .eq("workspace_id", actor.workspaceId)
+        .eq("marketplace_account_id", account.id)
+        .eq("resource_type", "amazon_orders_inventory")
         .maybeSingle();
-
-      if (latestOrder?.last_update_date) {
-        syncAfter = latestOrder.last_update_date;
-        log.info(`[SyncOrdersRoute] Delta sync from: ${syncAfter}`);
-      } else {
-        // First sync: fetch last 90 days
-        syncAfter = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
-        log.info(`[SyncOrdersRoute] Initial sync from: ${syncAfter}`);
-      }
+      const cursor = checkpoint?.cursor as { lastUpdatedAfter?: unknown } | undefined;
+      updatedAfter = typeof cursor?.lastUpdatedAfter === "string"
+        ? cursor.lastUpdatedAfter
+        : checkpoint?.last_succeeded_at ?? undefined;
+    }
+    if (input.fullRebuild) {
+      updatedAfter = new Date(Date.now() - 365 * 86_400_000).toISOString();
+    } else if (!updatedAfter) {
+      updatedAfter = new Date(Date.now() - 90 * 86_400_000).toISOString();
+    }
+    const oldestAllowed = Date.now() - 366 * 86_400_000;
+    if (Date.parse(updatedAfter) < oldestAllowed || Date.parse(updatedAfter) > Date.now()) {
+      return NextResponse.json({ error: "Order sync boundary must be within the past year.", code: "INVALID_SYNC_BOUNDARY" }, { status: 400 });
     }
 
-    log.info("[SyncOrdersRoute] Starting orders sync...");
-    const summary = await syncOrders(supabaseAdmin, userId, credentials, syncAfter);
-
-    log.info("[SyncOrdersRoute] Starting FBA inventory sync...");
-    const invResult = await syncFbaInventory(supabaseAdmin, userId, credentials);
-    log.info("[SyncOrdersRoute] FBA inventory sync complete", undefined, { invResult });
-
-    return NextResponse.json({ 
-      success: true, 
-      summary: {
-        ...summary,
-        inventorySynced: invResult.synced,
-        inventoryError: invResult.error
-      }
+    const fiveMinuteWindow = Math.floor(Date.now() / 300_000);
+    const result = await jobService.enqueue({
+      type: "amazon_orders_sync",
+      payload: {
+        marketplaceAccountId: account.id,
+        updatedAfter,
+        phase: "orders",
+        pendingOrders: [],
+        imported: 0,
+        inventoryImported: 0,
+        pageCount: 0,
+      },
+      userId: actor.userId,
+      workspaceId: actor.workspaceId,
+      priority: 1,
+      maxAttempts: 8,
+      idempotencyKey: `amazon_orders_sync:${account.id}:${fiveMinuteWindow}`,
+      resourceKey: `marketplace-account:${account.id}:amazon-orders-sync`,
     });
-  } catch (error: any) {
-    const authErr = authErrorResponse(error);
-    if (error?.name === "AuthError") {
-      return NextResponse.json(authErr.body, { status: authErr.status });
+    const now = new Date().toISOString();
+    await actor.supabaseAdmin.from("sync_checkpoints").upsert({
+      workspace_id: actor.workspaceId,
+      marketplace_account_id: account.id,
+      resource_type: "amazon_orders_inventory",
+      cursor: { lastUpdatedAfter: updatedAfter },
+      last_attempted_at: now,
+      freshness_state: "syncing",
+      updated_at: now,
+    }, { onConflict: "workspace_id,marketplace_account_id,resource_type" });
+
+    return NextResponse.json({
+      data: { jobId: result.jobId, status: result.status, updatedAfter },
+    }, { status: 202 });
+  } catch (error) {
+    if (error instanceof z.ZodError || error instanceof SyntaxError) {
+      return NextResponse.json({ error: "Invalid orders sync request.", code: "VALIDATION_ERROR" }, { status: 400 });
     }
-    console.error("[SyncOrdersRoute] Error:", error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    const response = authErrorResponse(error);
+    return NextResponse.json(response.body, { status: response.status });
   }
 }
-

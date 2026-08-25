@@ -1,29 +1,35 @@
 /**
- * SellerPlus OS — AI Keyword Engine
- * 
- * Complete keyword intelligence system for Amazon sellers.
- * Routes requests through the centralized AI Gateway.
+ * SellerPlus keyword intelligence boundary.
+ *
+ * AI may propose and classify search terms, but it is not a source of Amazon
+ * search volume, rank, CPC, or competition measurements. Quantitative methods
+ * fail closed until a legitimate data adapter is configured.
  */
+import { z } from "zod";
+import { generateValidatedJson } from "./schema-validator";
 
-import { routeLLMRequest, isAiAvailable, cleanJsonResponse } from "./utils";
-import { ProviderCapability } from "./types";
-
-// ─── Types ───────────────────────────────────────────────────────────
+export type KeywordDataSource =
+  | "amazon_brand_analytics"
+  | "amazon_autocomplete"
+  | "external_provider"
+  | "ai_inferred";
 
 export interface KeywordResult {
   keyword: string;
   type: "primary" | "secondary" | "long-tail" | "backend" | "hidden-opportunity";
-  searchVolume: number;
-  difficulty: number;
+  searchVolume: number | null;
+  difficulty: number | null;
   intent: "informational" | "commercial" | "transactional" | "navigational";
-  rankingPotential: "high" | "medium" | "low";
-  competitorUsage: "common" | "rare" | "untapped";
+  rankingPotential: "high" | "medium" | "low" | "unknown";
+  competitorUsage: "common" | "rare" | "untapped" | "unknown";
   suggestedPlacement: "title" | "bullets" | "backend" | "description";
   cluster: string;
-  bidMin: number;
-  bidMax: number;
-  opportunityScore: number;
-  trend: "rising" | "stable" | "declining";
+  bidMin: number | null;
+  bidMax: number | null;
+  opportunityScore: number | null;
+  trend: "rising" | "stable" | "declining" | "unknown";
+  dataSource: KeywordDataSource;
+  metricsAvailable: boolean;
 }
 
 export interface KWResearchReport {
@@ -49,6 +55,7 @@ export interface KWResearchReport {
   aiSummary: string;
   peakMonths: string[];
   trendDirection: "rising" | "stable" | "declining";
+  dataSource: Exclude<KeywordDataSource, "ai_inferred">;
 }
 
 export interface RelatedKeyword {
@@ -63,6 +70,7 @@ export interface RelatedKeyword {
   wordCount: number;
   seasonality: "evergreen" | "seasonal" | "holiday";
   competitorUsage: "common" | "rare" | "untapped";
+  dataSource: Exclude<KeywordDataSource, "ai_inferred">;
 }
 
 export interface AsinKeywordData {
@@ -92,6 +100,7 @@ export interface AsinKeywordProfile {
   sponsoredCount: number;
   aiSummary: string;
   competitiveStrength: "weak" | "moderate" | "strong" | "dominant";
+  dataSource: Exclude<KeywordDataSource, "ai_inferred">;
 }
 
 export interface KeywordCluster {
@@ -99,12 +108,13 @@ export interface KeywordCluster {
   name: string;
   type: "primary" | "secondary" | "long-tail" | "buyer-intent" | "brand" | "seasonal" | "informational" | "high-conversion" | "low-competition";
   keywords: string[];
-  avgVolume: number;
-  avgDifficulty: number;
-  opportunityLevel: "low" | "medium" | "high";
+  avgVolume: number | null;
+  avgDifficulty: number | null;
+  opportunityLevel: "low" | "medium" | "high" | "unknown";
   recommendedPlacement: string[];
   aiExplanation: string;
   color: string;
+  dataSource: "ai_inferred";
 }
 
 export interface KWInsight {
@@ -125,441 +135,147 @@ export interface KeywordRankResult {
   difficulty: number;
   rankingStatus: "dominant" | "page-1" | "page-2" | "not-ranking";
   recommendation: string;
+  dataSource: Exclude<KeywordDataSource, "ai_inferred">;
 }
 
-// ─── Core Functions ──────────────────────────────────────────────────
+const keywordIdeaSchema = z.object({
+  keyword: z.string().trim().min(1).max(150),
+  type: z.enum(["primary", "secondary", "long-tail", "backend", "hidden-opportunity"]),
+  intent: z.enum(["informational", "commercial", "transactional", "navigational"]),
+  suggestedPlacement: z.enum(["title", "bullets", "backend", "description"]),
+  cluster: z.string().trim().min(1).max(80),
+}).strict();
+
+const keywordIdeaListSchema = z.array(keywordIdeaSchema).min(5).max(30);
+
+const clusterSchema = z.array(z.object({
+  id: z.string().trim().min(1).max(80),
+  name: z.string().trim().min(1).max(100),
+  type: z.enum(["primary", "secondary", "long-tail", "buyer-intent", "brand", "seasonal", "informational", "high-conversion", "low-competition"]),
+  keywords: z.array(z.string().trim().min(1).max(150)).min(1).max(100),
+  recommendedPlacement: z.array(z.enum(["title", "bullets", "description", "backend", "a-plus", "ads"])).max(6),
+  aiExplanation: z.string().trim().min(1).max(500),
+  color: z.enum(["emerald", "sky", "amber", "violet", "pink", "orange", "teal", "rose"]),
+}).strict()).min(1).max(12);
+
+function unavailable(capability: string) {
+  return capability + " requires Amazon Brand Analytics/Search Query Performance or a licensed keyword-data provider. SellerPlus will not fabricate these measurements with an LLM.";
+}
+
+function qualitativeResult(idea: z.infer<typeof keywordIdeaSchema>): KeywordResult {
+  return {
+    ...idea,
+    searchVolume: null,
+    difficulty: null,
+    rankingPotential: "unknown",
+    competitorUsage: "unknown",
+    bidMin: null,
+    bidMax: null,
+    opportunityScore: null,
+    trend: "unknown",
+    dataSource: "ai_inferred",
+    metricsAvailable: false,
+  };
+}
 
 export async function generateKeywords(
   productName: string,
   category: string,
   competitors: string,
-  userId?: string
+  userId?: string,
 ): Promise<KeywordResult[]> {
-  if (!isAiAvailable()) return [];
+  const prompt = [
+    "You are the SellerPlus keyword ideation service. Generate semantic Amazon search-term candidates for the seller's actual product.",
+    "Do not provide search volume, ranking, CPC, difficulty, trend, competitor usage, or any other measured claim.",
+    "Product: " + JSON.stringify(productName),
+    "Category: " + JSON.stringify(category),
+    "Seller-provided competitor notes: " + JSON.stringify(competitors),
+    "Return only a JSON array with 15-25 objects shaped as:",
+    "{\"keyword\":\"string\",\"type\":\"primary|secondary|long-tail|backend|hidden-opportunity\",\"intent\":\"informational|commercial|transactional|navigational\",\"suggestedPlacement\":\"title|bullets|backend|description\",\"cluster\":\"string\"}",
+    "hidden-opportunity means a semantic niche worth validating; it does not claim competitors missed it. Avoid third-party trademarks and brand names.",
+  ].join("\n");
 
-  try {
-    const prompt = `
-      You are Gemini Keyword Engine™, a professional keyword intelligence system comparable to Helium10 and Jungle Scout.
-      
-      Analyze the following product, category, and competitor context. Generate 20-25 highly relevant, marketplace-optimized keywords.
-
-      Product Name: ${productName}
-      Category: ${category}
-      Competitor Context: ${competitors}
-
-      Requirements:
-      - Include a mix: 4-5 primary, 3-4 secondary, 5-6 long-tail, 3-4 backend, and 3-4 hidden-opportunity keywords
-      - Hidden opportunities = keywords competitors are NOT targeting but have real buyer search volume
-      - Estimate search volume realistically (don't inflate — use plausible India/global marketplace numbers)
-      - Difficulty should reflect actual competition density (0-100)
-      - Suggest where each keyword should be placed: title, bullets, backend, or description
-      - Indicate whether competitors commonly use, rarely use, or haven't tapped each keyword
-      - Assign each keyword to a semantic cluster (e.g. "size", "material", "use-case", "audience", "style")
-      - Estimate realistic PPC CPC bid range in INR (bidMin and bidMax, e.g. 3 and 12)
-      - Calculate opportunityScore = round((searchVolume/1000) * (1 - difficulty/100) * rankingMultiplier) capped at 100
-      - Assign trend based on seasonal/market signals: "rising", "stable", or "declining"
-
-      Return ONLY a JSON array (no markdown wrapping):
-      [
-        {
-          "keyword": "string",
-          "type": "primary" | "secondary" | "long-tail" | "backend" | "hidden-opportunity",
-          "searchVolume": number,
-          "difficulty": number (0-100),
-          "intent": "informational" | "commercial" | "transactional" | "navigational",
-          "rankingPotential": "high" | "medium" | "low",
-          "competitorUsage": "common" | "rare" | "untapped",
-          "suggestedPlacement": "title" | "bullets" | "backend" | "description",
-          "cluster": "string (semantic group name)",
-          "bidMin": number (INR),
-          "bidMax": number (INR),
-          "opportunityScore": number (0-100),
-          "trend": "rising" | "stable" | "declining"
-        }
-      ]
-    `;
-
-    const { text } = await routeLLMRequest(
-      prompt, 
-      userId, 
-      { capabilities: [ProviderCapability.JsonMode] }
-    );
-    return JSON.parse(cleanJsonResponse(text)) as KeywordResult[];
-  } catch (error) {
-    console.error("[KeywordEngine] generateKeywords error:", error);
-    throw new Error("Failed to generate keywords. Please try again.");
-  }
+  const ideas = await generateValidatedJson(prompt, keywordIdeaListSchema, { temperature: 0.2 }, userId);
+  return ideas.map(qualitativeResult);
 }
 
 export async function generateKeywordsFromAsin(
-  asin: string,
-  category: string,
-  userId?: string
+  _asin: string,
+  _category: string,
+  _userId?: string,
 ): Promise<KeywordResult[]> {
-  if (!isAiAvailable()) return [];
-  try {
-    const prompt = `
-      You are Gemini Keyword Engine™. A seller has provided competitor ASIN: ${asin} in category: ${category}.
-      Based on your training data and knowledge of Amazon ranking patterns, infer and generate 18-22 keywords that this ASIN most likely ranks for organically.
-
-      Think about: typical product type for this ASIN pattern, category-specific ranking keywords, long-tail buyer searches, backend hidden terms.
-
-      Return ONLY a JSON array (no markdown):
-      [
-        {
-          "keyword": "string",
-          "type": "primary" | "secondary" | "long-tail" | "backend" | "hidden-opportunity",
-          "searchVolume": number,
-          "difficulty": number (0-100),
-          "intent": "informational" | "commercial" | "transactional" | "navigational",
-          "rankingPotential": "high" | "medium" | "low",
-          "competitorUsage": "common" | "rare" | "untapped",
-          "suggestedPlacement": "title" | "bullets" | "backend" | "description",
-          "cluster": "string",
-          "bidMin": number,
-          "bidMax": number,
-          "opportunityScore": number (0-100),
-          "trend": "rising" | "stable" | "declining"
-        }
-      ]
-    `;
-    const { text } = await routeLLMRequest(
-      prompt, 
-      userId, 
-      { capabilities: [ProviderCapability.JsonMode] }
-    );
-    return JSON.parse(cleanJsonResponse(text)) as KeywordResult[];
-  } catch (error) {
-    console.error("[KeywordEngine] reverseAsin error:", error);
-    throw new Error("Reverse ASIN lookup failed. Please try again.");
-  }
+  throw new Error(unavailable("Reverse-ASIN keyword discovery"));
 }
-
-// ─── Deep Research ───────────────────────────────────────────────────
 
 export async function deepResearchKeyword(
-  keyword: string,
-  marketplace: string = "Amazon India",
-  userId?: string
+  _keyword: string,
+  _marketplace = "Amazon India",
+  _userId?: string,
 ): Promise<{ success: boolean; error?: string; data?: KWResearchReport }> {
-  if (!isAiAvailable()) return { success: false, error: "Gemini API key is not configured." };
-  try {
-    const prompt = `
-      You are Amazon KW™, an elite keyword intelligence engine comparable to Helium10 and Jungle Scout.
-      Perform a deep keyword analysis for: "${keyword}" on ${marketplace}.
-
-      Think like a senior Amazon SEO strategist. Generate realistic, data-driven estimates based on your knowledge of Amazon India/global marketplace dynamics, category competition, and buyer behavior patterns.
-
-      Return ONLY a JSON object with NO markdown wrapping:
-      {
-        "keyword": "${keyword}",
-        "marketplace": "${marketplace}",
-        "monthlySearchVolume": number,
-        "searchVolumeTrend": [12 monthly values Jan-Dec as percentage of peak volume],
-        "difficultyScore": number (0-100),
-        "opportunityScore": number (0-100),
-        "buyerIntentScore": number (0-100),
-        "competitionLevel": "low" | "medium" | "high" | "very-high",
-        "sponsoredCompetition": number (0-100),
-        "organicCompetition": number (0-100),
-        "cpcEstimate": number (INR),
-        "seasonalDemand": "low" | "medium" | "high" | "peak",
-        "searchFrequencyRank": number,
-        "clickThroughPotential": number (0-100),
-        "conversionPotential": number (0-100),
-        "relevancyScore": number (0-100),
-        "rankingPotential": "low" | "medium" | "high",
-        "revenueOpportunity": "string",
-        "topRelatedKeywords": ["5-8 related keywords"],
-        "aiSummary": "3-4 sentence expert assessment",
-        "peakMonths": ["month names"],
-        "trendDirection": "rising" | "stable" | "declining"
-      }
-    `;
-    const { text } = await routeLLMRequest(
-      prompt, 
-      userId, 
-      { capabilities: [ProviderCapability.JsonMode] }
-    );
-    return { success: true, data: JSON.parse(cleanJsonResponse(text)) as KWResearchReport };
-  } catch (error) {
-    console.error("[KeywordEngine] deepResearch error:", error);
-    return { success: false, error: "Keyword research failed. Please try again." };
-  }
+  return { success: false, error: unavailable("Quantitative keyword research") };
 }
-
-// ─── Related Keywords ────────────────────────────────────────────────
 
 export async function getRelatedKeywords(
-  keyword: string,
-  category: string,
-  marketplace: string = "Amazon India",
-  seedKeywords?: string[],
-  userId?: string
+  _keyword: string,
+  _category: string,
+  _marketplace = "Amazon India",
+  _seedKeywords?: string[],
+  _userId?: string,
 ): Promise<RelatedKeyword[]> {
-  if (!isAiAvailable()) return [];
-  try {
-    let prompt = "";
-    if (seedKeywords && seedKeywords.length > 0) {
-      prompt = `
-        You are an elite Amazon Keyword Data Scientist.
-        We have fetched the following 100% REAL Amazon autocomplete search queries typed by real buyers for the seed term "${keyword}":
-        ${JSON.stringify(seedKeywords)}
-
-        Your task is to enrich this list of real keywords with highly realistic Amazon metrics based on search trends in the category "${category}" on "${marketplace}".
-        If there are fewer than 30 keywords, generate 10-15 additional "ai-suggested" keywords.
-
-        Return ONLY a JSON array (no markdown):
-        [
-          {
-            "keyword": "string",
-            "type": "related" | "long-tail" | "synonym" | "broad" | "phrase" | "exact" | "misspelling" | "trending" | "ai-suggested",
-            "searchVolume": number,
-            "difficulty": number (0-100),
-            "cpc": number (INR),
-            "opportunityScore": number (0-100),
-            "intent": "informational" | "commercial" | "transactional" | "navigational",
-            "trend": "rising" | "stable" | "declining",
-            "wordCount": number,
-            "seasonality": "evergreen" | "seasonal" | "holiday",
-            "competitorUsage": "common" | "rare" | "untapped"
-          }
-        ]
-      `;
-    } else {
-      prompt = `
-        You are an elite Amazon Keyword Data Scientist. Generate 35-45 related keywords for: "${keyword}" in category: ${category} on ${marketplace}.
-
-        Include ALL types: related, long-tail, synonym, broad, phrase, exact, misspelling, trending, ai-suggested.
-
-        Return ONLY a JSON array (no markdown):
-        [
-          {
-            "keyword": "string",
-            "type": "related" | "long-tail" | "synonym" | "broad" | "phrase" | "exact" | "misspelling" | "trending" | "ai-suggested",
-            "searchVolume": number,
-            "difficulty": number (0-100),
-            "cpc": number (INR),
-            "opportunityScore": number (0-100),
-            "intent": "informational" | "commercial" | "transactional" | "navigational",
-            "trend": "rising" | "stable" | "declining",
-            "wordCount": number,
-            "seasonality": "evergreen" | "seasonal" | "holiday",
-            "competitorUsage": "common" | "rare" | "untapped"
-          }
-        ]
-      `;
-    }
-
-    const { text } = await routeLLMRequest(
-      prompt, 
-      userId, 
-      { capabilities: [ProviderCapability.JsonMode] }
-    );
-    return JSON.parse(cleanJsonResponse(text)) as RelatedKeyword[];
-  } catch (error) {
-    console.error("[KeywordEngine] getRelatedKeywords error:", error);
-    throw new Error("Failed to get related keywords.");
-  }
+  throw new Error(unavailable("Related-keyword metrics"));
 }
-
-// ─── ASIN Analysis ───────────────────────────────────────────────────
 
 export async function analyzeAsinKeywords(
-  asin: string,
-  category: string,
-  marketplace: string = "Amazon India",
-  productContext: string = "",
-  userId?: string
+  _asin: string,
+  _category: string,
+  _marketplace = "Amazon India",
+  _productContext = "",
+  _userId?: string,
 ): Promise<{ success: boolean; error?: string; data?: AsinKeywordProfile }> {
-  if (!isAiAvailable()) return { success: false, error: "Gemini API key is not configured." };
-  try {
-    const contextBlock = productContext
-      ? `ACTUAL PRODUCT DETAILS:\n${productContext}\n\nCRITICAL: Use this actual catalog info to generate realistic keyword rankings.`
-      : `Based on your knowledge, infer what product this ASIN likely is.`;
-
-    const prompt = `
-      You are Amazon KW™ performing a competitor ASIN analysis for ASIN: ${asin} on ${marketplace}.
-      ${contextBlock}
-
-      Return ONLY a JSON object (no markdown):
-      {
-        "asin": "${asin}",
-        "estimatedProduct": "string",
-        "category": "${category}",
-        "totalEstimatedTraffic": number,
-        "keywords": [
-          {
-            "keyword": "string",
-            "estimatedRank": number (1-50),
-            "trafficShare": number (%),
-            "isSponsored": boolean,
-            "isOrganic": boolean,
-            "searchVolume": number,
-            "keywordValue": "string",
-            "isGap": boolean,
-            "difficulty": number (0-100),
-            "intent": "informational" | "commercial" | "transactional" | "navigational"
-          }
-        ],
-        "topTrafficKeywords": ["5 keywords"],
-        "uniqueKeywords": ["keywords only this ASIN ranks for"],
-        "gapOpportunities": ["high-value keywords to target"],
-        "sharedKeywords": ["common category keywords"],
-        "organicCount": number,
-        "sponsoredCount": number,
-        "aiSummary": "expert analysis string",
-        "competitiveStrength": "weak" | "moderate" | "strong" | "dominant"
-      }
-
-      Generate 20-28 realistic keywords. trafficShare values should sum to ~100%.
-    `;
-    const { text } = await routeLLMRequest(
-      prompt, 
-      userId, 
-      { capabilities: [ProviderCapability.JsonMode] }
-    );
-    return { success: true, data: JSON.parse(cleanJsonResponse(text)) as AsinKeywordProfile };
-  } catch (error) {
-    console.error("[KeywordEngine] analyzeAsin error:", error);
-    return { success: false, error: "ASIN analysis failed. Please try again." };
-  }
+  return { success: false, error: unavailable("ASIN keyword and traffic analysis") };
 }
-
-// ─── Clustering & Insights ──────────────────────────────────────────
 
 export async function clusterKeywordList(
   keywords: string[],
   productContext: string,
-  userId?: string
+  userId?: string,
 ): Promise<KeywordCluster[]> {
-  if (!isAiAvailable()) return [];
-  try {
-    const prompt = `
-      You are Amazon KW™ clustering engine. Group the following keywords into 5-8 strategic clusters for: ${productContext}
-
-      Keywords: ${keywords.join(", ")}
-
-      Use cluster types: primary, secondary, long-tail, buyer-intent, brand, seasonal, informational, high-conversion, low-competition.
-
-      Return ONLY a JSON array (no markdown):
-      [
-        {
-          "id": "string (slug)",
-          "name": "string",
-          "type": "primary" | "secondary" | "long-tail" | "buyer-intent" | "brand" | "seasonal" | "informational" | "high-conversion" | "low-competition",
-          "keywords": ["keywords"],
-          "avgVolume": number,
-          "avgDifficulty": number (0-100),
-          "opportunityLevel": "low" | "medium" | "high",
-          "recommendedPlacement": ["title" | "bullets" | "description" | "backend" | "a-plus" | "ads"],
-          "aiExplanation": "string",
-          "color": "emerald | sky | amber | violet | pink | orange | teal | rose"
-        }
-      ]
-    `;
-    const { text } = await routeLLMRequest(
-      prompt, 
-      userId, 
-      { capabilities: [ProviderCapability.JsonMode] }
-    );
-    return JSON.parse(cleanJsonResponse(text)) as KeywordCluster[];
-  } catch (error) {
-    console.error("[KeywordEngine] clustering error:", error);
-    throw new Error("Clustering failed.");
-  }
+  const prompt = [
+    "Cluster only the supplied keyword strings for this product context: " + JSON.stringify(productContext),
+    "Keywords: " + JSON.stringify(keywords),
+    "Do not infer search volume, difficulty, rank, CPC, opportunity, or trend.",
+    "Return only JSON objects with id, name, type, keywords, recommendedPlacement, aiExplanation, and color.",
+  ].join("\n");
+  const clusters = await generateValidatedJson(prompt, clusterSchema, { temperature: 0.1 }, userId);
+  return clusters.map((cluster) => ({
+    ...cluster,
+    avgVolume: null,
+    avgDifficulty: null,
+    opportunityLevel: "unknown",
+    dataSource: "ai_inferred",
+  }));
 }
 
 export async function generateKwInsights(
-  keyword: string,
+  _keyword: string,
   researchData: Partial<KWResearchReport>,
-  relatedCount: number,
-  competitorCount: number,
-  userId?: string
+  _relatedCount: number,
+  _competitorCount: number,
+  _userId?: string,
 ): Promise<KWInsight[]> {
-  if (!isAiAvailable()) return [];
-  try {
-    const prompt = `
-      You are Amazon KW™ AI Insights engine. Generate 6-8 strategic insights for: "${keyword}"
-
-      Context:
-      - Monthly Volume: ${researchData.monthlySearchVolume}
-      - Difficulty: ${researchData.difficultyScore}/100
-      - Opportunity: ${researchData.opportunityScore}/100
-      - Competition: ${researchData.competitionLevel}
-      - Trend: ${researchData.trendDirection}
-      - CPC: ₹${researchData.cpcEstimate}
-      - Related keywords found: ${relatedCount}
-      - Competitors analyzed: ${competitorCount}
-
-      Mix types: opportunity, warning, tip, trend, competitor insights.
-
-      Return ONLY a JSON array (no markdown):
-      [
-        {
-          "id": "string",
-          "type": "opportunity" | "warning" | "tip" | "competitor" | "trend",
-          "headline": "string",
-          "detail": "string (2-3 sentences)",
-          "action": "string (specific next step)",
-          "impact": "low" | "medium" | "high",
-          "relatedKeywords": ["2-4 keywords"]
-        }
-      ]
-    `;
-    const { text } = await routeLLMRequest(
-      prompt, 
-      userId, 
-      { capabilities: [ProviderCapability.JsonMode] }
-    );
-    return JSON.parse(cleanJsonResponse(text)) as KWInsight[];
-  } catch (error) {
-    console.error("[KeywordEngine] insights error:", error);
-    return [];
+  if (!researchData.dataSource) {
+    throw new Error(unavailable("Quantitative keyword insights"));
   }
+  throw new Error("Keyword insight execution is not enabled for the configured data provider.");
 }
 
 export async function checkAsinKeywordRanks(
-  asin: string,
-  keywords: string[],
-  category: string,
-  marketplace: string = "Amazon India",
-  productContext: string = "",
-  userId?: string
+  _asin: string,
+  _keywords: string[],
+  _category: string,
+  _marketplace = "Amazon India",
+  _productContext = "",
+  _userId?: string,
 ): Promise<{ success: boolean; error?: string; data?: KeywordRankResult[] }> {
-  if (!isAiAvailable()) return { success: false, error: "Gemini API key is not configured." };
-  try {
-    const contextBlock = productContext
-      ? `ACTUAL PRODUCT DETAILS:\n${productContext}\n\nUse this to estimate realistic rankings.`
-      : `Based on your knowledge, estimate rankings for this ASIN.`;
-
-    const prompt = `
-      You are Amazon KW™ Rank Tracker checking ranks for ASIN: ${asin} on ${marketplace}.
-      ${contextBlock}
-
-      Keywords to check: ${keywords.join(", ")}
-
-      Return ONLY a JSON array (no markdown):
-      [
-        {
-          "keyword": "string",
-          "organicRank": number (1-50) | "50+",
-          "sponsoredRank": number (1-20) | "none",
-          "searchVolume": number,
-          "difficulty": number (0-100),
-          "rankingStatus": "dominant" | "page-1" | "page-2" | "not-ranking",
-          "recommendation": "1 actionable recommendation"
-        }
-      ]
-    `;
-    const { text } = await routeLLMRequest(
-      prompt, 
-      userId, 
-      { capabilities: [ProviderCapability.JsonMode] }
-    );
-    return { success: true, data: JSON.parse(cleanJsonResponse(text)) as KeywordRankResult[] };
-  } catch (error) {
-    console.error("[KeywordEngine] rankCheck error:", error);
-    return { success: false, error: "Keyword rank check failed. Please try again." };
-  }
+  return { success: false, error: unavailable("Keyword rank tracking") };
 }

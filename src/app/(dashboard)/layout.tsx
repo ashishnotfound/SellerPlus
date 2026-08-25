@@ -16,7 +16,6 @@ import { useKeyboardShortcut } from "@/hooks/use-keyboard-shortcut";
 import { useAnalyticsStore } from "@/hooks/use-analytics-store";
 import { useListingsStore } from "@/hooks/use-listings-store";
 import { useGoalsStore } from "@/hooks/use-goals-store";
-import { useToastStore } from "@/hooks/use-toast-store";
 import { AlertTriangle } from "lucide-react";
 
 export default function DashboardLayout({
@@ -29,35 +28,26 @@ export default function DashboardLayout({
   const loading = useAuth((s) => s.loading);
   const checkSession = useAuth((s) => s.checkSession);
   const logout = useAuth((s) => s.logout);
-  const stopImpersonation = useAuth((s) => s.stopImpersonation);
   const loadSubscription = useSubscription((s) => s.loadSubscription);
   const loadConnections = useConnections((s) => s.loadConnections);
-  const amazonConnected = useConnections((s) => s.amazonConnected);
   const loadAnalyticsData = useAnalyticsStore((s) => s.loadAnalyticsData);
   const loadListings = useListingsStore((s) => s.loadListings);
   const loadGoals = useGoalsStore((s) => s.loadGoals);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
-  const [isSandbox, setIsSandbox] = useState(false);
-
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      setIsSandbox(localStorage.getItem("sp_amazon_sandbox") === "true");
-    }
-  }, [amazonConnected]);
 
   useEffect(() => {
     checkSession();
-    loadSubscription();
-  }, [checkSession, loadSubscription]);
+  }, [checkSession]);
 
   useEffect(() => {
     if (user?.id) {
+      loadSubscription();
       loadConnections(user.id);
       loadAnalyticsData(user.id);
       loadListings(user.id);
       loadGoals(user.id);
     }
-  }, [user?.id, loadConnections, loadAnalyticsData, loadListings, loadGoals]);
+  }, [user?.id, user?.workspaceId, loadSubscription, loadConnections, loadAnalyticsData, loadListings, loadGoals]);
 
 
   useEffect(() => {
@@ -134,42 +124,7 @@ export default function DashboardLayout({
       <main className="flex-1 flex flex-col overflow-y-auto max-h-screen pb-16 md:pb-0">
         {/* Mobile top spacer — clears the hamburger button */}
         <div className="h-14 md:hidden shrink-0" />
-        {/* Impersonation Banner */}
-        {user.impersonatingUserId && (
-          <div className="w-full bg-purple-600 text-white px-5 py-2.5 text-xs font-bold flex items-center justify-between shrink-0 select-none shadow-md">
-            <div className="flex items-center gap-2">
-              <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping" />
-              <span>👁️ IMPERSONATION ACTIVE: Mapped context to target owner account <strong className="underline font-mono">{user.email}</strong></span>
-            </div>
-            <button 
-              onClick={() => {
-                stopImpersonation();
-                useToastStore.getState().success("Session Restored", "Returned to administrator session context.");
-              }}
-              className="px-2.5 py-1 rounded bg-white text-purple-700 hover:bg-zinc-100 font-bold transition-all text-[10px]"
-            >
-              Exit Impersonation Mode
-            </button>
-          </div>
-        )}
-
         <div className="p-7 max-w-7xl mx-auto flex flex-col gap-5 w-full flex-1">
-          {/* Sandbox sync banner */}
-          {amazonConnected && isSandbox && (
-            <div className="flex items-center justify-between px-4 py-2.5 rounded-lg border border-[#00c48c]/15 bg-[#00c48c]/[0.04] text-xs text-[#00c48c]/80">
-              <div className="flex items-center gap-2">
-                <span className="w-1.5 h-1.5 rounded-full bg-[#00c48c] animate-pulse" />
-                <span>
-                  <strong className="text-[#00c48c]">Sandbox Sync Active</strong>
-                  {" "}— High-fidelity mock metrics populated in your Supabase tables.
-                </span>
-              </div>
-              <span className="text-[10px] text-[#00c48c]/50 uppercase tracking-wider font-bold">
-                Simulated 100%
-              </span>
-            </div>
-          )}
-
           <ErrorBoundary>{children}</ErrorBoundary>
         </div>
       </main>

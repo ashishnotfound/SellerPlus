@@ -17,12 +17,12 @@ describe("KPIService.calculateACOS", () => {
     expect(KPIService.calculateACOS(1000, 5000)).toBe(20);
   });
 
-  it("returns 100 when adSales is 0 and spend > 0 (infinite ACOS)", () => {
-    expect(KPIService.calculateACOS(500, 0)).toBe(100);
+  it("returns null when ACOS is undefined because attributed sales are zero", () => {
+    expect(KPIService.calculateACOS(500, 0)).toBeNull();
   });
 
-  it("returns 0 when both spend and adSales are 0", () => {
-    expect(KPIService.calculateACOS(0, 0)).toBe(0);
+  it("returns null when ACOS has no denominator", () => {
+    expect(KPIService.calculateACOS(0, 0)).toBeNull();
   });
 
   it("handles 100% ACOS (spend equals sales)", () => {
@@ -38,12 +38,12 @@ describe("KPIService.calculateROAS", () => {
     expect(KPIService.calculateROAS(1000, 5000)).toBe(5);
   });
 
-  it("returns 999 (sentinel for infinite) when spend is 0 and adSales > 0", () => {
-    expect(KPIService.calculateROAS(0, 1000)).toBe(999);
+  it("returns null when ROAS has no spend denominator", () => {
+    expect(KPIService.calculateROAS(0, 1000)).toBeNull();
   });
 
-  it("returns 0 when both are 0", () => {
-    expect(KPIService.calculateROAS(0, 0)).toBe(0);
+  it("returns null when ROAS has no spend denominator and no sales", () => {
+    expect(KPIService.calculateROAS(0, 0)).toBeNull();
   });
 });
 
@@ -55,12 +55,12 @@ describe("KPIService.calculateTACOS", () => {
     expect(KPIService.calculateTACOS(500, 10000)).toBe(5);
   });
 
-  it("returns 100 when totalSales is 0 and spend > 0", () => {
-    expect(KPIService.calculateTACOS(500, 0)).toBe(100);
+  it("returns null when TACOS has no revenue denominator", () => {
+    expect(KPIService.calculateTACOS(500, 0)).toBeNull();
   });
 
-  it("returns 0 when both are 0", () => {
-    expect(KPIService.calculateTACOS(0, 0)).toBe(0);
+  it("returns null when TACOS has no revenue denominator and no spend", () => {
+    expect(KPIService.calculateTACOS(0, 0)).toBeNull();
   });
 });
 
@@ -125,8 +125,8 @@ describe("KPIService.calculateRestockDays", () => {
     expect(KPIService.calculateRestockDays(100, 10)).toBe(10);
   });
 
-  it("returns 999 sentinel when velocity is 0 (no sales)", () => {
-    expect(KPIService.calculateRestockDays(100, 0)).toBe(999);
+  it("returns null when velocity is not measured", () => {
+    expect(KPIService.calculateRestockDays(100, 0)).toBeNull();
   });
 });
 
@@ -140,39 +140,6 @@ describe("KPIService.calculateConversionRate", () => {
 
   it("returns 0 when sessions is 0", () => {
     expect(KPIService.calculateConversionRate(50, 0)).toBe(0);
-  });
-});
-
-// ─── Business Health Score ────────────────────────────────────────────
-
-describe("KPIService.calculateBusinessHealthScore", () => {
-  it("returns a score object with all components", () => {
-    const result = KPIService.calculateBusinessHealthScore(25, 20, 8, 60);
-    expect(result).toHaveProperty("finalScore");
-    expect(result).toHaveProperty("components");
-    expect(result.components).toHaveProperty("advertising");
-    expect(result.components).toHaveProperty("profitability");
-    expect(result.components).toHaveProperty("inventory");
-    expect(result.components).toHaveProperty("growth");
-  });
-
-  it("keeps all scores within 0–100 range", () => {
-    const result = KPIService.calculateBusinessHealthScore(0, 100, 999, 100);
-    expect(result.finalScore).toBeGreaterThanOrEqual(0);
-    expect(result.finalScore).toBeLessThanOrEqual(100);
-    expect(result.components.advertising).toBeGreaterThanOrEqual(0);
-    expect(result.components.advertising).toBeLessThanOrEqual(100);
-  });
-
-  it("gives higher score to healthy business (low ACOS, high margin)", () => {
-    const healthy = KPIService.calculateBusinessHealthScore(15, 30, 10, 70);
-    const unhealthy = KPIService.calculateBusinessHealthScore(80, 2, 1, 5);
-    expect(healthy.finalScore).toBeGreaterThan(unhealthy.finalScore);
-  });
-
-  it("returns 0 final score for worst-case business", () => {
-    const result = KPIService.calculateBusinessHealthScore(100, 0, 0, 0);
-    expect(result.finalScore).toBeGreaterThanOrEqual(0);
   });
 });
 
