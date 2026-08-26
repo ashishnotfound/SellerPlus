@@ -107,6 +107,51 @@ describe("Reyo Pack packing API workflow", () => {
     });
   });
 
+  it("preserves the one-success/one-conflict result when pack requests race", async () => {
+    let confirmationCalls = 0;
+    rpc.mockImplementation(async (name: string) => {
+      if (name !== "confirm_reyo_pack_shipment") return { data: {}, error: null };
+      const callNumber = confirmationCalls++;
+      await new Promise((resolve) => setTimeout(resolve, callNumber === 0 ? 5 : 0));
+      return {
+        data: callNumber === 0
+          ? {
+              outcome: "PACKED",
+              orderId: "50000000-0000-4000-8000-000000000001",
+              amazonOrderId: "404-1234567-1234567",
+              shipmentId,
+              awb: "371317811994",
+              packedAt: "2026-08-26T08:30:00.000Z",
+              unitsPacked: 1,
+            }
+          : {
+              outcome: "ALREADY_PACKED",
+              orderId: "50000000-0000-4000-8000-000000000001",
+              amazonOrderId: "404-1234567-1234567",
+              shipmentId,
+              awb: "371317811994",
+              packedAt: "2026-08-26T08:30:00.000Z",
+              message: "This shipment was already packed by another device.",
+            },
+        error: null,
+      };
+    });
+
+    const request = (key: string) => pack(new Request("http://localhost/api/reyo-pack/pack", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, shipmentId, idempotencyKey: key }),
+    }));
+    const responses = await Promise.all([
+      request("pack:device-a:race"),
+      request("pack:device-b:race"),
+    ]);
+    const payloads = await Promise.all(responses.map((response) => response.json()));
+
+    expect(responses.every((response) => response.status === 200)).toBe(true);
+    expect(payloads.map((payload) => payload.data.outcome).sort()).toEqual(["ALREADY_PACKED", "PACKED"]);
+    expect(rpc).toHaveBeenCalledTimes(2);
+  });
+
   it("rejects an invalid RPC payload instead of returning fake packing success", async () => {
     rpc.mockResolvedValue({ data: { outcome: "PACKED" }, error: null });
     const response = await pack(new Request("http://localhost/api/reyo-pack/pack", {
