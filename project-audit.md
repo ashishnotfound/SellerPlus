@@ -8,10 +8,10 @@ This document describes the code that is actually present in the repository. It 
 
 - Next.js production build passes for all 103 routes.
 - TypeScript strict checking passes.
-- 31 Vitest files and 202 tests pass.
+- 33 Vitest files and 207 tests pass.
 - All 57 SQL migration files have balanced transaction boundaries.
 - ESLint completes with zero errors. It reports 29 visible non-blocking legacy warnings, primarily image optimization and hook dependency cleanup.
-- The latest local branch and `origin/production-hardening` point to the same tree at commit `6d13641`.
+- The latest local branch and `origin/production-hardening` point to the same tree at commit `55c76f6`.
 
 ## Implemented foundations
 
