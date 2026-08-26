@@ -41,7 +41,7 @@ if ($sqlFiles.Count -eq 0) {
   exit 0
 }
 
-Write-Host "Applying $($sqlFiles.Count) migration(s) to: $Conn"
+Write-Host "Applying $($sqlFiles.Count) migration(s) to the configured Postgres target."
 
 foreach ($file in $sqlFiles) {
   Write-Host "\n--- Applying $($file.Name) ---"

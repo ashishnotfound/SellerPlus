@@ -3,6 +3,20 @@ const fs = require('fs')
 const path = require('path')
 const { Client } = require('pg')
 
+function redactedConnectionTarget(value) {
+  try {
+    const url = new URL(value)
+    if (url.password) url.password = '***'
+    return url.toString()
+  } catch {
+    return '[redacted connection string]'
+  }
+}
+
+function migrationHasTransaction(sql) {
+  return /^\s*begin\s*;/im.test(sql) && /^\s*commit\s*;/im.test(sql)
+}
+
 async function run() {
   const conn = process.env.SUPABASE_DB_CONN
   if (!conn) {
@@ -12,7 +26,7 @@ async function run() {
 
   const migrationsDir = path.resolve(__dirname, '..', 'supabase', 'migrations')
   const files = fs.readdirSync(migrationsDir).filter(f => f.endsWith('.sql')).sort()
-  console.log(`Applying ${files.length} migration(s) to: ${conn}`)
+  console.log(`Applying ${files.length} migration(s) to: ${redactedConnectionTarget(conn)}`)
 
   const client = new Client({ connectionString: conn })
   await client.connect()
@@ -22,14 +36,16 @@ async function run() {
       const fullPath = path.join(migrationsDir, file)
       console.log('\n--- Applying', file, '---')
       const sql = fs.readFileSync(fullPath, 'utf8')
+      const ownsTransaction = migrationHasTransaction(sql)
       try {
-        await client.query('BEGIN')
+        if (!ownsTransaction) await client.query('BEGIN')
         await client.query(sql)
-        await client.query('COMMIT')
+        if (!ownsTransaction) await client.query('COMMIT')
       } catch (err) {
-        await client.query('ROLLBACK').catch(()=>{})
+        if (!ownsTransaction) await client.query('ROLLBACK').catch(()=>{})
         console.error('\nError applying', file)
-        console.error(err && err.message ? err.message : err)
+        const message = err && err.message ? err.message : String(err)
+        console.error(message.replaceAll(conn, '[redacted connection string]'))
         process.exitCode = 1
         throw err
       }
