@@ -24,14 +24,14 @@ begin
 
   if workspace_id is not null then
     perform realtime.send(
-      'reyo-pack:' || workspace_id::text,
-      'STATE_CHANGED',
       jsonb_build_object(
         'table', tg_table_name,
         'operation', tg_op,
         'recordId', record_id,
         'changedAt', now()
       ),
+      'STATE_CHANGED',
+      'reyo-pack:' || workspace_id::text,
       true
     );
   end if;
