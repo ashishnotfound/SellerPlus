@@ -62,6 +62,11 @@ Apply the ordered files in `supabase/migrations/` to the target Postgres databas
 SUPABASE_DB_CONN='postgres://…' node scripts/run-migrations-direct.js
 ```
 
+For local Supabase development, install the Supabase CLI and Docker, then use
+the committed `supabase/config.toml` with `supabase start` and
+`supabase db reset`. The full-schema snapshots under `supabase/schema-archives/`
+are reference-only and are not part of the migration chain.
+
 Review the migration files before applying them to production. The repository includes tenant/RLS and operational-schema checks, but a live migration run requires a configured Supabase/Postgres project; this checkout does not contain production credentials.
 
 ## Validation
