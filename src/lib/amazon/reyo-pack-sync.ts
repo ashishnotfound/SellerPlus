@@ -156,6 +156,22 @@ async function persistAmazonPackage(
   const outcome = typeof data === "object" && data
     ? String((data as Record<string, unknown>).outcome ?? "")
     : "";
+  if (amazonPackage.packageStatus?.detailedStatus || amazonPackage.shipTime || amazonPackage.shipFromAddress) {
+    const shipmentId = typeof data === "object" && data
+      ? (data as Record<string, unknown>).shipmentId
+      : null;
+    if (typeof shipmentId === "string") {
+      const { error: detailsError } = await ctx.supabaseAdmin.rpc("update_reyo_pack_amazon_package_details", {
+        p_workspace_id: ctx.workspaceId,
+        p_shipment_id: shipmentId,
+        p_status_detail: amazonPackage.packageStatus?.detailedStatus ?? null,
+        p_ship_time: amazonPackage.shipTime ?? null,
+        p_ship_from_address: amazonPackage.shipFromAddress ?? null,
+        p_source_updated_at: sourceUpdatedAt,
+      });
+      if (detailsError) throw detailsError;
+    }
+  }
   return {
     updated: outcome !== "TERMINAL_UNCHANGED",
     error: outcome === "TERMINAL_ALLOCATION_CONFLICT"

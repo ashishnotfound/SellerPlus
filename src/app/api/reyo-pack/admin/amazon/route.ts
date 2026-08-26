@@ -68,6 +68,7 @@ export async function GET(request: Request): Promise<NextResponse> {
         ordersApiVersion: "2026-01-01",
         labelDocuments: "Only available when returned by an authorized Amazon shipping workflow; order synchronization does not fabricate labels.",
         cancellationTime: "Amazon Orders v2026-01-01 does not expose a separate cancellation timestamp; SellerPlus records the source lastUpdatedTime.",
+        easyShip: "AMAZON_EASY_SHIP programs and package detailedStatus are retained when Amazon returns them. External Fulfillment shipment processing and label generation require Amazon allowlisting/roles and a distinct shipment identifier; Reyo Pack does not infer one from packageReferenceId.",
       },
     } }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {

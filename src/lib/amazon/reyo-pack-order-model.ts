@@ -25,6 +25,8 @@ export const reyoPackOrderItemSchema = z.object({
 export const reyoPackPackageSchema = z.object({
   packageReferenceId: z.string().min(1).max(500),
   createdTime: z.string().datetime().optional(),
+  shipTime: z.string().datetime().optional(),
+  shipFromAddress: z.record(z.unknown()).optional(),
   packageStatus: z.object({
     status: z.string().min(1).max(100),
     detailedStatus: z.string().max(200).optional(),

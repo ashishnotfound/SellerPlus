@@ -35,6 +35,8 @@ function amazonOrder() {
     }],
     packages: [{
       packageReferenceId: "PKG-1",
+      shipTime: "2026-08-24T12:00:00.000Z",
+      shipFromAddress: { city: "Bengaluru", countryCode: "IN" },
       packageStatus: { status: "PendingPickUp" },
       carrier: "Amazon Easy Ship",
       shippingService: "Easy Ship",
@@ -53,6 +55,8 @@ describe("Orders API v2026-01-01 Reyo Pack model", () => {
 
     expect(page.orders[0].packages[0]).toMatchObject({
       packageReferenceId: "PKG-1",
+      shipTime: "2026-08-24T12:00:00.000Z",
+      shipFromAddress: { city: "Bengaluru", countryCode: "IN" },
       trackingNumber: "371317811994",
       packageItems: [{ orderItemId: "item-1", quantity: 2 }],
     });

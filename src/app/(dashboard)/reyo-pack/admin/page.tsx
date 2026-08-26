@@ -61,7 +61,7 @@ interface AmazonState {
   } | null;
   latestRun: AmazonRun | null;
   runs: AmazonRun[];
-  limitations: { ordersApiVersion: string; labelDocuments: string; cancellationTime: string };
+  limitations: { ordersApiVersion: string; labelDocuments: string; cancellationTime: string; easyShip: string };
 }
 
 interface AmazonRun {
@@ -228,7 +228,7 @@ function AmazonPanel({ amazon, onRefresh }: { amazon: AmazonState | null; onRefr
     <Section title="Latest synchronization" description="Progress is read from the central sync-run record; reconnecting or closing this page does not cancel the job.">
       {run ? <><div className="flex flex-wrap items-center gap-3"><StatusPill status={run.status} /><span className="text-sm text-white">{run.progress_message || `${run.sync_type} synchronization`}</span><span className="ml-auto text-xs text-zinc-500">Started {formatDate(run.started_at || run.created_at)}</span></div><div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-5"><Metric label="Scanned" value={run.orders_scanned} tone="sky" /><Metric label="New" value={run.orders_new} /><Metric label="Updated" value={run.orders_updated} /><Metric label="Cancelled" value={run.orders_cancelled} tone="rose" /><Metric label="Errors" value={run.error_count} tone={run.error_count ? "rose" : "emerald"} /></div>{run.last_error_message ? <p className="mt-4 rounded-lg border border-rose-400/20 bg-rose-400/5 p-3 text-xs text-rose-200">{run.last_error_code ? `${run.last_error_code}: ` : ""}{run.last_error_message}</p> : null}</> : <p className="text-sm text-zinc-500">No synchronization has run for this marketplace account yet.</p>}
     </Section>
-    <Section title="Supported-data notes"><ul className="space-y-2 text-xs leading-5 text-zinc-400"><li>Orders use Amazon Orders API {amazon.limitations.ordersApiVersion}; cancellation time is represented by Amazon's source update time.</li><li>Labels and shipping slips are shown only when an authorized Amazon workflow supplies a document. Reyo Pack never fabricates label URLs.</li><li>{amazon.limitations.cancellationTime}</li></ul></Section>
+    <Section title="Supported-data notes"><ul className="space-y-2 text-xs leading-5 text-zinc-400"><li>Orders use Amazon Orders API {amazon.limitations.ordersApiVersion}; cancellation time is represented by Amazon's source update time.</li><li>Labels and shipping slips are shown only when an authorized Amazon workflow supplies a document. Reyo Pack never fabricates label URLs.</li><li>{amazon.limitations.cancellationTime}</li><li>{amazon.limitations.easyShip}</li></ul></Section>
   </div>;
 }
 
