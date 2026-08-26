@@ -18,7 +18,9 @@ export async function GET(req: Request) {
 
     return NextResponse.json({ success: true, data: response });
   } catch (error) {
-    log.error(`[API/Health] Failed to generate business health score`, (error as Error).message);
+    log.error(`[API/Health] Failed to generate business health score`, undefined, {
+      error: error instanceof Error ? error.message : "Unknown health calculation error.",
+    });
     const { body, status } = authErrorResponse(error);
     return NextResponse.json(body, { status });
   }

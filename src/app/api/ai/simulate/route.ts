@@ -14,14 +14,16 @@ export async function POST(req: Request) {
 
     log.info(`[API/Simulate] Running business simulation`, undefined, {
       userId: user.userId,
-      scenario
+      scenarioLength: scenario.length,
     });
 
     const response = await BusinessSimulator.simulate(user.userId, user.workspaceId, scenario);
 
     return NextResponse.json({ success: true, data: response });
   } catch (error) {
-    log.error(`[API/Simulate] Failed to run simulation`, (error as Error).message);
+    log.error(`[API/Simulate] Failed to run simulation`, undefined, {
+      error: error instanceof Error ? error.message : "Unknown simulation error.",
+    });
     if (error instanceof z.ZodError) return NextResponse.json({ error: error.issues[0]?.message ?? "Invalid scenario." }, { status: 400 });
     const { body, status } = authErrorResponse(error);
     return NextResponse.json(body, { status });

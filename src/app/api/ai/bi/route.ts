@@ -78,7 +78,9 @@ export async function POST(req: Request) {
     }
     const budget = aiBudgetErrorResponse(error);
     if (budget) return NextResponse.json({ error: budget.error, code: budget.code }, { status: budget.status });
-    log.error("[API/BI] Failed", error instanceof Error ? error.message : "Unknown error");
+    log.error("[API/BI] Failed", undefined, {
+      error: error instanceof Error ? error.message : "Unknown BI error.",
+    });
     const response = authErrorResponse(error);
     return NextResponse.json(response.body, { status: response.status });
   }

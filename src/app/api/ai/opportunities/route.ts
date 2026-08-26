@@ -16,7 +16,9 @@ export async function GET(req: Request) {
 
     return NextResponse.json({ success: true, data: response });
   } catch (error) {
-    log.error(`[API/Opportunities] Failed to scan for opportunities`, (error as Error).message);
+    log.error(`[API/Opportunities] Failed to scan for opportunities`, undefined, {
+      error: error instanceof Error ? error.message : "Unknown opportunity scan error.",
+    });
     const { body, status } = authErrorResponse(error);
     return NextResponse.json(body, { status });
   }
