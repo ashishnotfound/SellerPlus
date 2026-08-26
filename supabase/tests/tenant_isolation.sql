@@ -1,7 +1,7 @@
 begin;
 
 create extension if not exists pgtap with schema extensions;
-select plan(29);
+select plan(30);
 
 insert into auth.users (
   id, email, encrypted_password, email_confirmed_at,
@@ -349,6 +349,15 @@ select is(
   ),
   false,
   'Authenticated clients cannot bypass Reyo Pack admin settings authorization'
+);
+select is(
+  has_function_privilege(
+    'authenticated',
+    'public.get_reyo_pack_admin_overview(uuid)',
+    'EXECUTE'
+  ),
+  false,
+  'Authenticated clients cannot bypass the authorized Reyo Pack overview API'
 );
 
 select is(
