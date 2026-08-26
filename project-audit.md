@@ -11,7 +11,7 @@ This document describes the code that is actually present in the repository. It 
 - 33 Vitest files and 207 tests pass.
 - All 58 SQL migration files are present; the latest forward-only security migration enforces active workspace access in both request authentication and tenant RLS helpers.
 - ESLint completes with zero errors. It reports 29 visible non-blocking legacy warnings, primarily image optimization and hook dependency cleanup.
-- The latest local branch and `origin/production-hardening` point to the same tree at commit `f36364a`.
+- The final release gate verifies that the local branch and `origin/production-hardening` point to the same tree; the branch is kept as the ongoing recovery point.
 
 ## Implemented foundations
 
