@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
+import Link from "next/link";
 import { useAuth } from "@/hooks/use-auth";
 import { useToastStore } from "@/hooks/use-toast-store";
 import { useOfflineQueue } from "@/hooks/use-offline-queue";
@@ -393,6 +394,17 @@ export default function WarehousePage() {
           <RefreshCw className={cn("w-4 h-4", refreshing && "animate-spin")} />
           {refreshing ? "Refreshing…" : "Refresh"}
         </button>
+      </div>
+
+      <div className="flex flex-wrap items-start gap-3 rounded-2xl border border-emerald-400/20 bg-emerald-400/5 px-4 py-3 text-sm text-emerald-100">
+        <PackageCheck className="mt-0.5 h-5 w-5 shrink-0 text-emerald-300" />
+        <p className="min-w-0 flex-1 leading-5">
+          <strong className="font-semibold text-emerald-200">Use Reyo Pack for barcode-driven fulfillment.</strong>{" "}
+          Its server-authoritative scan, cancellation, claim, and packing history are the source of truth. This legacy view remains for non-scan warehouse status work.
+        </p>
+        <Link href="/reyo-pack" className="inline-flex min-h-10 shrink-0 items-center rounded-xl border border-emerald-300/30 bg-emerald-300/10 px-3 text-xs font-bold text-emerald-200 hover:bg-emerald-300/20">
+          Open Reyo Pack
+        </Link>
       </div>
 
       {/* Stats Bar */}
