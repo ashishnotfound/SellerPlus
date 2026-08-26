@@ -1,7 +1,7 @@
 begin;
 
 create extension if not exists pgtap with schema extensions;
-select plan(24);
+select plan(26);
 
 insert into auth.users (
   id, email, encrypted_password, email_confirmed_at,
@@ -303,6 +303,25 @@ select throws_ok(
   '42501',
   null,
   'Sensitive label document references remain service-only'
+);
+
+select is(
+  has_function_privilege(
+    'authenticated',
+    'public.get_reyo_pack_queue_page(uuid,text,text,text,boolean,integer,integer)',
+    'EXECUTE'
+  ),
+  false,
+  'Authenticated clients cannot bypass the authorized Reyo Pack queue API'
+);
+select is(
+  has_function_privilege(
+    'authenticated',
+    'public.get_reyo_pack_history_page(uuid,text,text,timestamptz,timestamptz,integer,integer)',
+    'EXECUTE'
+  ),
+  false,
+  'Authenticated clients cannot bypass the authorized Reyo Pack history API'
 );
 
 select is(

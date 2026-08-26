@@ -26,29 +26,33 @@ describe("Reyo Pack Amazon sync scheduler", () => {
   });
 
   it("uses the service-only atomic due-sync claim", async () => {
-    rpc.mockResolvedValue({
-      data: [{
-        sync_run_id: "run-1",
-        queued_job_id: "job-1",
-        workspace_id: "workspace-1",
-        marketplace_account_id: "account-1",
-      }],
-      error: null,
-    });
+    rpc
+      .mockResolvedValueOnce({
+        data: [{
+          sync_run_id: "run-1",
+          queued_job_id: "job-1",
+          workspace_id: "workspace-1",
+          marketplace_account_id: "account-1",
+        }],
+        error: null,
+      })
+      .mockResolvedValueOnce({ data: 2, error: null });
 
     const response = await GET(new Request("http://localhost/api/workers/reyo-pack-scheduler", {
       headers: { authorization: "Bearer test-cron-secret" },
     }));
 
     expect(rpc).toHaveBeenCalledWith("enqueue_due_reyo_pack_syncs", { p_limit: 25 });
+    expect(rpc).toHaveBeenCalledWith("abandon_stale_reyo_pack_sessions", { p_idle_minutes: 480 });
     await expect(response.json()).resolves.toMatchObject({
       enqueued: 1,
+      sessionsAbandoned: 2,
       syncs: [{ sync_run_id: "run-1", queued_job_id: "job-1" }],
     });
   });
 
   it("does not report success when the database claim fails", async () => {
-    rpc.mockResolvedValue({ data: null, error: new Error("database unavailable") });
+    rpc.mockResolvedValueOnce({ data: null, error: new Error("database unavailable") });
 
     const response = await GET(new Request("http://localhost/api/workers/reyo-pack-scheduler"));
 

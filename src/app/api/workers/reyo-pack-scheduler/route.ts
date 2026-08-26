@@ -11,13 +11,20 @@ export async function GET(request: Request): Promise<NextResponse> {
       p_limit: 25,
     });
     if (error) throw error;
+    const { data: abandoned, error: abandonError } = await supabaseAdmin.rpc(
+      "abandon_stale_reyo_pack_sessions",
+      { p_idle_minutes: 480 },
+    );
+    if (abandonError) throw abandonError;
 
     const enqueued = Array.isArray(data) ? data : [];
     log.info("[ReyoPackScheduler] Due Amazon sync jobs enqueued", undefined, {
       count: enqueued.length,
+      sessionsAbandoned: typeof abandoned === "number" ? abandoned : 0,
     });
     return NextResponse.json({
       enqueued: enqueued.length,
+      sessionsAbandoned: typeof abandoned === "number" ? abandoned : 0,
       syncs: enqueued,
     });
   } catch (error) {
