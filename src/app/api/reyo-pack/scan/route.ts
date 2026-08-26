@@ -31,7 +31,7 @@ export async function POST(request: Request): Promise<NextResponse> {
         }, { status: 403 });
       }
     }
-    const { data, error } = await actor.supabaseAdmin.rpc("claim_reyo_pack_shipment", {
+    const { data, error } = await actor.supabaseAdmin.rpc("claim_reyo_pack_shipment_with_details", {
       p_workspace_id: actor.workspaceId,
       p_actor_id: actor.userId,
       p_session_id: input.sessionId,

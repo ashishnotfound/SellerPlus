@@ -41,6 +41,11 @@ describe("Reyo Pack packing API workflow", () => {
         shipmentId,
         awb: "371317811994",
         packingStatus: "PACKING",
+        trackingNumber: "371317811994",
+        carrier: "AMAZON",
+        shippingService: "Easy Ship Standard",
+        amazonPackageStatusDetail: "READY_FOR_PICKUP",
+        amazonShipTime: null,
         labelAvailable: false,
         claimExpiresAt: "2026-08-26T08:30:00.000Z",
         items: [{ sku: "POSTER-8X12", title: "Spider-Man Poster", quantity: 1 }],
@@ -59,7 +64,7 @@ describe("Reyo Pack packing API workflow", () => {
 
     expect(response.status).toBe(200);
     expect(requirePermission).toHaveBeenCalledWith(expect.anything(), "reyo_pack.pack");
-    expect(rpc).toHaveBeenCalledWith("claim_reyo_pack_shipment", {
+    expect(rpc).toHaveBeenCalledWith("claim_reyo_pack_shipment_with_details", {
       p_workspace_id: workspaceId,
       p_actor_id: userId,
       p_session_id: sessionId,
@@ -68,7 +73,13 @@ describe("Reyo Pack packing API workflow", () => {
       p_marketplace_account_id: null,
     });
     await expect(response.json()).resolves.toMatchObject({
-      data: { outcome: "ORDER_FOUND", shipmentId, awb: "371317811994" },
+      data: {
+        outcome: "ORDER_FOUND",
+        shipmentId,
+        awb: "371317811994",
+        carrier: "AMAZON",
+        amazonPackageStatusDetail: "READY_FOR_PICKUP",
+      },
     });
   });
 
