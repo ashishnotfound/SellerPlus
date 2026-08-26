@@ -52,6 +52,37 @@ function bearerToken(request: Request): string | null {
   return value.length > 0 ? value : null;
 }
 
+/**
+ * Cookie-authenticated browser mutations must originate from this application.
+ * Bearer-authenticated clients (the mobile/PWA shell and trusted integrations)
+ * are not vulnerable to ambient-cookie CSRF and are intentionally allowed.
+ * Requests without Origin/Referer are retained for non-browser workers and
+ * command-line clients; authentication and permission checks still apply.
+ */
+export function requireSameOriginMutation(request: Request): void {
+  if (!["POST", "PUT", "PATCH", "DELETE"].includes(request.method.toUpperCase())) return;
+  if (bearerToken(request)) return;
+
+  const hostCandidates = [
+    request.headers.get("host"),
+    request.headers.get("x-forwarded-host"),
+  ].filter((value): value is string => Boolean(value));
+  const origin = request.headers.get("origin");
+  const referer = request.headers.get("referer");
+  const source = origin ?? referer;
+  if (!source) return;
+
+  let sourceUrl: URL;
+  try {
+    sourceUrl = new URL(source);
+  } catch {
+    throw new AuthError("Cross-site mutation rejected.", 403);
+  }
+  if (!hostCandidates.includes(sourceUrl.host)) {
+    throw new AuthError("Cross-site mutation rejected.", 403);
+  }
+}
+
 function requestCookies(request: Request) {
   const header = request.headers.get("cookie") ?? "";
   return header
@@ -127,6 +158,7 @@ async function resolveWorkspace(
 }
 
 export async function authenticate(request: Request): Promise<AuthenticatedUser> {
+  requireSameOriginMutation(request);
   const admin = getAdminClient();
   const userId = await resolveUserId(request, admin);
 
