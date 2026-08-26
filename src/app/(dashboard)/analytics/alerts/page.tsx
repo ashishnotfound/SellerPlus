@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { GlassCard } from "@/components/glass-card";
 import { useToastStore } from "@/hooks/use-toast-store";
 import { useAuth } from "@/hooks/use-auth";
@@ -44,7 +44,7 @@ export default function OperationsAlertsPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [scanSummary, setScanSummary] = useState<{ scannedListings: number; staleListingsExcluded: number } | null>(null);
 
-  const loadAlerts = async () => {
+  const loadAlerts = useCallback(async () => {
     if (!user?.id) return;
     setLoading(true);
     setLoadError(null);
@@ -61,11 +61,11 @@ export default function OperationsAlertsPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [user?.id]);
 
   useEffect(() => {
     loadAlerts();
-  }, [user?.id, user?.workspaceId]);
+  }, [loadAlerts]);
 
   const handleRunDiagnostics = async () => {
     if (!user?.id) return;

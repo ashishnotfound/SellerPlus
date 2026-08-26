@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo, useRef } from "react";
+import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { GlassCard } from "@/components/glass-card";
 import { useAuth } from "@/hooks/use-auth";
 import { sellerplusApiFetch } from "@/lib/client/api-fetch";
@@ -81,12 +81,6 @@ export default function CostsPage() {
   const chatBottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (user?.id) {
-      loadData();
-    }
-  }, [user?.id, user?.workspaceId, costPage]);
-
-  useEffect(() => {
     chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, chatLoading]);
 
@@ -98,7 +92,7 @@ export default function CostsPage() {
     }
   }, [messages]);
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     setLoading(true);
     try {
       const response = await sellerplusApiFetch(`/api/cost-profiles?page=${costPage}&pageSize=100`);
@@ -112,7 +106,13 @@ export default function CostsPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [costPage]);
+
+  useEffect(() => {
+    if (user?.id) {
+      loadData();
+    }
+  }, [loadData, user?.id]);
 
   const handleOpenCreate = () => {
     setEditingProfile(null);

@@ -69,13 +69,7 @@ export default function ExpensesPage() {
     return body;
   }, []);
 
-  useEffect(() => {
-    if (user?.id) {
-      loadExpenses();
-    }
-  }, [page, user?.id, user?.workspaceId]);
-
-  const loadExpenses = async () => {
+  const loadExpenses = useCallback(async () => {
     setLoading(true);
     try {
       const body = await apiRequest(`/api/expenses?page=${page}&limit=${pageSize}`);
@@ -87,7 +81,13 @@ export default function ExpensesPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [apiRequest, page]);
+
+  useEffect(() => {
+    if (user?.id) {
+      loadExpenses();
+    }
+  }, [loadExpenses, user?.id]);
 
   const handleOpenCreate = () => {
     setEditingExpense(null);

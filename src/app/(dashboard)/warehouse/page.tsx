@@ -310,7 +310,7 @@ export default function WarehousePage() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [user, statusFilter]);
+  }, [showError, user, statusFilter]);
 
   useEffect(() => {
     fetchOrders();
