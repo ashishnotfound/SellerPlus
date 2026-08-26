@@ -9,7 +9,7 @@ This document describes the code that is actually present in the repository. It 
 - Next.js production build passes for all 103 routes.
 - TypeScript strict checking passes.
 - 33 Vitest files and 207 tests pass.
-- All 58 SQL migration files are present; the latest forward-only security migration enforces active workspace access in both request authentication and tenant RLS helpers.
+- All 56 timestamped SQL migration files are present in the authoritative chain; three historical full-schema snapshots are preserved under `supabase/schema-archives/` and are excluded from deployment. The latest forward-only security migration enforces active workspace access in both request authentication and tenant RLS helpers.
 - ESLint completes with zero errors. It reports 29 visible non-blocking legacy warnings, primarily image optimization and hook dependency cleanup.
 - The final release gate verifies that the local branch and `origin/production-hardening` point to the same tree; the branch is kept as the ongoing recovery point.
 
