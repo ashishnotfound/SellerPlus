@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/hooks/use-auth";
 import { useSubscription } from "@/hooks/use-subscription";
 import { useConnections } from "@/hooks/use-connections";
@@ -24,6 +24,8 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   const router = useRouter();
+  const pathname = usePathname();
+  const isReyoPack = pathname.startsWith("/reyo-pack");
   const user = useAuth((s) => s.user);
   const loading = useAuth((s) => s.loading);
   const checkSession = useAuth((s) => s.checkSession);
@@ -64,7 +66,7 @@ export default function DashboardLayout({
       if (RESTRICTED.includes(user.role) && typeof window !== "undefined") {
         const path = window.location.pathname;
         // Allow /warehouse and /auth paths; redirect everything else
-        if (!path.startsWith("/warehouse") && !path.startsWith("/auth")) {
+        if (!path.startsWith("/warehouse") && !path.startsWith("/reyo-pack") && !path.startsWith("/auth")) {
           router.replace("/warehouse");
         }
       }
@@ -124,7 +126,9 @@ export default function DashboardLayout({
       <main className="flex-1 flex flex-col overflow-y-auto max-h-screen pb-16 md:pb-0">
         {/* Mobile top spacer — clears the hamburger button */}
         <div className="h-14 md:hidden shrink-0" />
-        <div className="p-7 max-w-7xl mx-auto flex flex-col gap-5 w-full flex-1">
+        <div className={isReyoPack
+          ? "w-full max-w-[1600px] mx-auto flex flex-col flex-1 px-3 pb-3 md:px-6 md:pb-6"
+          : "p-7 max-w-7xl mx-auto flex flex-col gap-5 w-full flex-1"}>
           <ErrorBoundary>{children}</ErrorBoundary>
         </div>
       </main>
@@ -136,9 +140,9 @@ export default function DashboardLayout({
       <ToastContainer />
 
       {/* Mobile Extras */}
-      <MobileNav />
-      <FloatingAI />
-      <FeedbackWidget />
+      {!isReyoPack && <MobileNav />}
+      {!isReyoPack && <FloatingAI />}
+      {!isReyoPack && <FeedbackWidget />}
     </div>
   );
 }

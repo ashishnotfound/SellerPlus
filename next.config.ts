@@ -1,12 +1,29 @@
 import type { NextConfig } from "next";
 import withPWAInit from "@ducanh2912/next-pwa";
 
-// PWA is temporarily disabled to prevent sw.js cache errors during development
-// const withPWA = withPWAInit({
-//   dest: "public",
-//   disable: process.env.NODE_ENV === "development",
-//   register: true,
-// });
+const withPWA = withPWAInit({
+  dest: "public",
+  disable: process.env.NODE_ENV === "development",
+  register: true,
+  cacheStartUrl: false,
+  dynamicStartUrl: true,
+  // Authenticated API responses must never be replayed across users or workspaces.
+  // Reyo Pack keeps a bounded, workspace-keyed operational snapshot in IndexedDB
+  // instead of asking Workbox to cache cookie/bearer-authenticated responses.
+  extendDefaultRuntimeCaching: true,
+  workboxOptions: {
+    runtimeCaching: [
+      {
+        urlPattern: ({ sameOrigin, url }: { sameOrigin: boolean; url: URL }) => sameOrigin && url.pathname.startsWith("/api/"),
+        handler: "NetworkOnly",
+        method: "GET",
+        // Same cache name as next-pwa's default API rule, so this NetworkOnly
+        // rule replaces it instead of leaving a second authenticated API cache.
+        options: { cacheName: "apis" },
+      },
+    ],
+  },
+});
 
 const securityHeaders = [
   {
@@ -27,7 +44,7 @@ const securityHeaders = [
   },
   {
     key: "Permissions-Policy",
-    value: "camera=(), microphone=(), geolocation=()",
+    value: "camera=(self), microphone=(), geolocation=()",
   },
   {
     key: "X-XSS-Protection",
@@ -65,4 +82,4 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+export default withPWA(nextConfig);

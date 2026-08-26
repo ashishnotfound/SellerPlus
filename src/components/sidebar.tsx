@@ -36,6 +36,7 @@ import {
   X,
   Warehouse,
   CalendarClock,
+  PackageSearch,
 } from "lucide-react";
 
 interface SidebarProps {
@@ -66,6 +67,7 @@ const NAV_ITEMS = [
   { label: "Approvals",       icon: <Cpu             className="w-4 h-4" />, href: "/automations/approvals",                restrictedRoles: undefined, allowedRoles: ["owner", "admin", "manager"] },
   // Operations group — visible to all roles including warehouse
   { label: "Warehouse",       icon: <Warehouse       className="w-4 h-4" />, href: "/warehouse",                           restrictedRoles: undefined, allowedRoles: undefined, group: "Operations" },
+  { label: "Reyo Pack",       icon: <PackageSearch   className="w-4 h-4" />, href: "/reyo-pack",                           restrictedRoles: undefined, allowedRoles: ["owner", "admin", "member", "operations"], group: "Operations" },
   // AI Tools group — restricted from warehouse-only roles
   { label: "AI Workspace",    icon: <Sparkles        className="w-4 h-4" />, href: "/ai-chat",        group: "AI",           restrictedRoles: undefined, allowedRoles: ["owner", "admin", "manager", "analyst"] },
   { label: "AI Tasks",        icon: <CalendarClock   className="w-4 h-4" />, href: "/tasks",          group: "AI",           restrictedRoles: undefined, allowedRoles: ["owner", "admin", "manager"] },

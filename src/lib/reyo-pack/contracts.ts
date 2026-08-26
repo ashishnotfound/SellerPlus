@@ -59,6 +59,7 @@ export const scanResultSchema = z.object({
   items: z.array(packingItemSchema).optional(),
   message: z.string().optional(),
 }).passthrough();
+export type ScanResult = z.infer<typeof scanResultSchema>;
 
 export const packResultSchema = z.object({
   outcome: z.enum([
@@ -80,6 +81,7 @@ export const packResultSchema = z.object({
   items: z.array(packingItemSchema).optional(),
   message: z.string().optional(),
 }).passthrough();
+export type PackResult = z.infer<typeof packResultSchema>;
 
 export const operationalPageSchema = z.object({
   rows: z.array(z.record(z.string(), z.unknown())),
