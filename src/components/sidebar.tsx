@@ -68,6 +68,7 @@ const NAV_ITEMS = [
   // Operations group — visible to all roles including warehouse
   { label: "Warehouse",       icon: <Warehouse       className="w-4 h-4" />, href: "/warehouse",                           restrictedRoles: undefined, allowedRoles: undefined, group: "Operations" },
   { label: "Reyo Pack",       icon: <PackageSearch   className="w-4 h-4" />, href: "/reyo-pack",                           restrictedRoles: undefined, allowedRoles: ["owner", "admin", "member", "operations"], group: "Operations" },
+  { label: "Reyo Pack Admin", icon: <ShieldAlert     className="w-4 h-4" />, href: "/reyo-pack/admin",                     restrictedRoles: undefined, allowedRoles: ["owner", "admin"], group: "Operations" },
   // AI Tools group — restricted from warehouse-only roles
   { label: "AI Workspace",    icon: <Sparkles        className="w-4 h-4" />, href: "/ai-chat",        group: "AI",           restrictedRoles: undefined, allowedRoles: ["owner", "admin", "manager", "analyst"] },
   { label: "AI Tasks",        icon: <CalendarClock   className="w-4 h-4" />, href: "/tasks",          group: "AI",           restrictedRoles: undefined, allowedRoles: ["owner", "admin", "manager"] },
