@@ -1,61 +1,65 @@
-# SellerPlus — Product Audit & Production Readiness Evaluation
+# SellerPlus — Current Production Audit
 
-This document presents a comprehensive, honest audit of the SellerPlus AI Commerce Operating System after completing the full rebuild and production upgrade.
+Updated 26 August 2026 for the `production-hardening` branch.
 
----
+This document describes the code that is actually present in the repository. It supersedes the original prototype-era audit, which referred to client-side Gemini calls, local fallback authentication, fabricated analytics, and simulated payment success paths that have since been removed or hardened.
 
-## 1. What's Working (Fully Operational)
+## Verified locally
 
-* **AI Listing Judge™**: Complete, consultant-grade Amazon listing auditing. Returns detailed breakdown scores (SEO, Conversion, Keywords, Image, Competitiveness), exact character limit analysis, detailed keyword highlights, image requirements audit, strengths/weaknesses grids, and prioritized numbered action steps.
-* **Describe & Generate**: Completely functional input canvas. Real Gemini-3.5-Flash returns real Title, Bullets, Description, backend keywords, recommended attributes, color/finish advice, style recommendations, and an overall SEO score.
-* **Competitor Benchmarking Matrix**: Comparative side-by-side table auditing up to 3 competitors. Evaluates price, bullet quality, images, keyword density, and key strategic differences.
-* **Gemini Keyword Engine™**: High-fidelity tabbed interface categorized into All, High Volume, Long-Tail, Backend, and Hidden Gems. Includes keyword difficulty slider bars, competitor usage badges, search volumes, and suggested placement metadata.
-* **AI Copywriter™**: Marketplace-specific copy generator targeting Amazon, Flipkart, Meesho, Etsy, and Shopify. Supports 6 distinct writing tones, copy-to-clipboard actions, and a full listing mode that does single-call generations.
-* **Subscription Gating (Zustand & localStorage)**: Gating of premium features (Etsy, Shopify, Full Listing Mode, Competitor Analysis, CSV Export) mapped to subscription tiers. Handles visual Lock badges, upgrade CTA banners, and counts real monthly usage limits (aiGenerations & auditsUsed).
-* **Safe Local-Fallback Auth**: Local storage persistent authentication sessions fallback when Supabase keys are unconfigured, avoiding white-screen crashes and permitting clean local development.
-* **Resilient Next.js Layouts**: Complete `ErrorBoundary` wrapper around the dashboard console to intercept rendering crashes.
+- Next.js production build passes for all 103 routes.
+- TypeScript strict checking passes.
+- 31 Vitest files and 202 tests pass.
+- All 57 SQL migration files have balanced transaction boundaries.
+- ESLint completes with zero errors. It reports 29 visible non-blocking legacy warnings, primarily image optimization and hook dependency cleanup.
+- The latest local branch and `origin/production-hardening` point to the same tree at commit `6d13641`.
 
----
+## Implemented foundations
 
-## 2. What's Broken / Incomplete (Needs Database Integration)
+### Authentication and tenancy
 
-* **Real Sales Sync**: Revenue, profit margin, stock tracking, and listing suppressions stat cards are currently hardcoded to "0" or empty states (waiting for Supabase sync or actual Amazon Seller API/Flipkart API integration).
-* **Payment Processing Keys**: Razorpay keys are currently unconfigured in `.env.local`. Payment flow acts in simulated checkout sandbox mode, updating client-side stores upon mock signature verification.
+- Browser sessions use Supabase SSR authentication and fail closed when a session is missing or expired.
+- Every authenticated request resolves workspace membership server-side; browser-supplied tenant IDs are not trusted.
+- Workspace roles and permissions protect administrative, finance, AI, Amazon, packing, and putaway operations.
+- Cookie-authenticated browser mutations are same-origin protected. Bearer-authenticated workers are handled separately.
+- Supabase service credentials are server-only. The browser receives only the publishable Supabase configuration.
 
----
+### AI safety and accounting
 
-## 3. Security Concerns & Vulnerabilities
+- Provider credentials are encrypted in the workspace credential store and never returned to the client.
+- All normal generation and provider-connection tests use the tenant-scoped AI gateway.
+- The provider test endpoint no longer accepts raw API keys or calls providers directly.
+- AI calls reserve and settle workspace budgets, record provider usage, respect retries/deadlines, and expose source-qualified cost status.
+- Structured outputs are schema-validated; model-generated financial/chart numbers are not treated as verified facts.
+- Payment checkout remains unavailable until a server-owned price catalog and signed webhook entitlement lifecycle are configured. No client-side payment success path is used.
 
-1. **Client-Side API Keys**: Gemini API calls are made directly from the client side (`gemini.ts` uses client context). In a production SaaS, the Gemini API Key must be kept strictly on the backend (e.g. Next.js Route Handlers) to avoid exposure.
-2. **Client-Side State Gating**: Subscription plan gating is enforced in Zustand state and client-side page code. A malicious user could easily change their store value to `business` or `pro` in the console to bypass local checks. This must be validated on the API server.
-3. **Local Storage Auth**: Auth store uses unencrypted local storage fallback (`sp_auth_user`).
+### Amazon and Seller operations
 
----
+- Amazon SP-API credentials are encrypted and server-side.
+- Orders, listings, Ads daily facts, refunds, expenses, goals, and analytics use tenant-scoped API/database paths.
+- Amazon synchronization is durable, resumable, idempotent, rate-limit aware, and checkpointed.
+- Missing Amazon fee or keyword-provider evidence is represented as unavailable rather than zero or an invented estimate.
 
-## 4. Performance & UX Evaluation
+### Reyo Pack fulfillment
 
-* **LCP / FCP**: Excellent due to Next.js static asset optimization and zero heavy external libraries.
-* **AI Response Times**: Gemini-3.5-Flash responses are returned in 1.5 - 3.5 seconds.
-* **Hydration Mismatch Solutions**: Solved Next.js hydration issues by using client-side `useEffect` initialization (`loadSubscription()`) rather than direct SSR rendering of local storage items.
-* **Aesthetics**: High-end glassmorphic dark mode styling using Harmonies HSL, gradient border masks, subtle noise overlays, and smooth entrance micro-interactions.
+- Package-level states, immutable packing events, sessions, cancellation history, locations, SKU/barcode mappings, and audit records are backed by PostgreSQL constraints and security-definer service functions.
+- Barcode scan → shipment lookup → server-side claim → packing confirmation is atomic and idempotent.
+- Concurrent pack attempts return one authoritative success and a conflict/already-packed result.
+- Amazon cancellation preserves prior packing events and blocks further packing.
+- The mobile PWA provides camera scanning through the browser BarcodeDetector API, manual/hardware fallback, sound/vibration feedback, realtime refresh, and safe read-only offline snapshots.
+- Label documents are streamed through an authenticated, no-store route; permanent public label URLs are not exposed.
+- Putaway mode, versioned location assignment, movement history, and admin controls are tenant-scoped.
 
----
+## Known limitations and external validation still required
 
-## 5. Future Feature Recommendations
+These are not silently represented as complete:
 
-1. **Amazon/Flipkart API Sync**: Build real OAuth redirect authentication to fetch merchant inventory logs.
-2. **Backend API Proxy**: Move Gemini logic from client TS files to Next.js route handlers (`src/app/api/` folder).
-3. **Webhook Notifications**: Integrate webhooks to alert merchants when a competitor alters pricing or image layouts.
+1. A live Supabase/Postgres project is required to execute migrations, validate RLS/advisors, and run a real database race/realtime test.
+2. Amazon production credentials, seller authorization, marketplace roles, and real orders are required to validate SP-API sync and Easy Ship/shipping responses.
+3. Android Chrome hardware validation is still required for camera permissions, BarcodeDetector behavior, audio, vibration, and long-session operation.
+4. Vercel deployment cannot be verified from this checkout because no matching Vercel project is available to the connected account.
+5. Amazon external-fulfillment label generation requires the relevant Amazon allowlisting and shipment identifier. Reyo Pack does not infer unsupported identifiers from package references.
+6. Quantitative keyword metrics require a legitimate keyword-data provider; the current engine intentionally returns qualitative candidates or an explicit unavailable result.
 
----
+## Release posture
 
-## 6. Scorecards
-
-| Metric | Score | Remarks |
-| :--- | :--- | :--- |
-| **UI/UX Aesthetics** | **94 / 100** | Premium look, elegant glassmorphism, responsive grids, lock indicators. |
-| **AI Optimization Quality** | **96 / 100** | Gemini-3.5-Flash prompts return structured JSON with detailed evaluations. |
-| **Resilience & Safety** | **90 / 100** | Error boundaries prevent page crashes, local fallback auth handles missing Supabase. |
-| **Production Readiness** | **78 / 100** | Needs backend API proxies for keys and database sync for order velocity. |
-
----
+The codebase is substantially hardened and locally buildable, but it is not honestly “production connected” until the external requirements above are configured and exercised. The repository is currently on the existing `ashishnotfound/SellerPlus` remote; creation of a separate private GitHub repository is blocked by the available GitHub connector capability, not by the application code.
