@@ -53,7 +53,7 @@ export async function PATCH(request: Request, { params }: RouteParams): Promise<
       p_note: note ?? null,
     });
     if (error?.code === "P0002") return NextResponse.json({ error: "Order not found or access denied." }, { status: 404 });
-    if (error?.code === "22023") return NextResponse.json({ error: error.message }, { status: 422 });
+    if (error?.code === "22023") return NextResponse.json({ error: "This warehouse status transition is no longer valid.", code: "INVALID_TRANSITION" }, { status: 422 });
     if (error) throw error;
     return NextResponse.json({ success: true, ...data });
   } catch (err) {

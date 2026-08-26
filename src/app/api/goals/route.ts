@@ -92,7 +92,7 @@ export async function POST(request: Request) {
       p_is_completed: input.isCompleted,
     });
     if (error?.code === "P0002") return NextResponse.json({ error: "Goal not found." }, { status: 404 });
-    if (error?.code === "40001") return NextResponse.json({ error: error.message }, { status: 409 });
+    if (error?.code === "40001") return NextResponse.json({ error: "The goal changed since it was loaded. Refresh and try again.", code: "VERSION_CONFLICT" }, { status: 409 });
     if (error) throw error;
     return NextResponse.json({ data }, { status: input.id ? 200 : 201 });
   } catch (error) {
@@ -115,7 +115,7 @@ export async function DELETE(request: Request) {
       p_expected_version: input.expectedVersion,
     });
     if (error?.code === "P0002") return NextResponse.json({ error: "Goal not found." }, { status: 404 });
-    if (error?.code === "40001") return NextResponse.json({ error: error.message }, { status: 409 });
+    if (error?.code === "40001") return NextResponse.json({ error: "The goal changed since it was loaded. Refresh and try again.", code: "VERSION_CONFLICT" }, { status: 409 });
     if (error) throw error;
     return NextResponse.json({ data });
   } catch (error) {

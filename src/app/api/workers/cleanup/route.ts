@@ -46,14 +46,16 @@ export async function POST(request: Request) {
       logsPruned: logsPruned || 0,
       cachesPruned: cachesPruned || 0
     });
-  } catch (err: any) {
-    const authErr = authErrorResponse(err);
-    if (err?.name === "AuthError") {
+  } catch (error: unknown) {
+    const authErr = authErrorResponse(error);
+    if (error instanceof Error && error.name === "AuthError") {
       return NextResponse.json({ error: authErr.body.error }, { status: authErr.status });
     }
-    log.error(`Database cleanup worker failed: ${err.message}`, correlationId, err);
+    log.error("Database cleanup worker failed.", correlationId, {
+      error: error instanceof Error ? error.message : "Unknown cleanup failure.",
+    });
     return NextResponse.json(
-      { success: false, error: err.message },
+      { success: false, error: "Database cleanup failed. Retry the worker later.", code: "CLEANUP_FAILED" },
       { status: 500 }
     );
   }

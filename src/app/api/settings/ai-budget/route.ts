@@ -79,7 +79,7 @@ export async function PUT(request: Request) {
     });
     if (error) {
       if (error.code === "40001") {
-        return NextResponse.json({ error: error.message, code: "VERSION_CONFLICT" }, { status: 409 });
+        return NextResponse.json({ error: "The AI budget policy changed since it was loaded. Refresh and try again.", code: "VERSION_CONFLICT" }, { status: 409 });
       }
       throw error;
     }
