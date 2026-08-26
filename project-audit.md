@@ -9,9 +9,9 @@ This document describes the code that is actually present in the repository. It 
 - Next.js production build passes for all 103 routes.
 - TypeScript strict checking passes.
 - 33 Vitest files and 207 tests pass.
-- All 57 SQL migration files have balanced transaction boundaries.
+- All 58 SQL migration files are present; the latest forward-only security migration enforces active workspace access in both request authentication and tenant RLS helpers.
 - ESLint completes with zero errors. It reports 29 visible non-blocking legacy warnings, primarily image optimization and hook dependency cleanup.
-- The latest local branch and `origin/production-hardening` point to the same tree at commit `55c76f6`.
+- The latest local branch and `origin/production-hardening` point to the same tree at commit `e860c46`.
 
 ## Implemented foundations
 
@@ -20,6 +20,7 @@ This document describes the code that is actually present in the repository. It 
 - Browser sessions use Supabase SSR authentication and fail closed when a session is missing or expired.
 - Every authenticated request resolves workspace membership server-side; browser-supplied tenant IDs are not trusted.
 - Workspace roles and permissions protect administrative, finance, AI, Amazon, packing, and putaway operations.
+- Suspended or closed workspaces are rejected before request handling and excluded by the database membership/RLS helper.
 - Cookie-authenticated browser mutations are same-origin protected. Bearer-authenticated workers are handled separately.
 - Supabase service credentials are server-only. The browser receives only the publishable Supabase configuration.
 
