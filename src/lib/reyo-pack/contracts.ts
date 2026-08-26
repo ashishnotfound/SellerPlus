@@ -85,3 +85,46 @@ export const operationalPageSchema = z.object({
   rows: z.array(z.record(z.string(), z.unknown())),
   total: z.coerce.number().int().min(0),
 });
+
+export const putawayLookupResultSchema = z.object({
+  outcome: z.enum([
+    "PRODUCT_NOT_FOUND",
+    "AMBIGUOUS_PRODUCT",
+    "LOCATION_NOT_ASSIGNED",
+    "LOCATION_INACTIVE",
+    "PRODUCT_FOUND",
+  ]),
+  barcode: z.string().optional(),
+  skuId: z.string().uuid().optional(),
+  sku: z.string().optional(),
+  asin: z.string().nullable().optional(),
+  productTitle: z.string().nullable().optional(),
+  size: z.string().nullable().optional(),
+  locationId: z.string().uuid().optional(),
+  locationCode: z.string().optional(),
+  locationName: z.string().optional(),
+  locationType: z.enum(["WAREHOUSE", "RACK", "SHELF", "BIN"]).optional(),
+  assignmentVersion: z.coerce.number().int().positive().optional(),
+  expectedQuantity: z.number().int().min(0).nullable().optional(),
+  message: z.string().optional(),
+}).passthrough();
+
+export const putawayConfirmResultSchema = z.object({
+  outcome: z.enum([
+    "LOCATION_NOT_ASSIGNED",
+    "LOCATION_CHANGED",
+    "PUTAWAY_CONFIRMED",
+  ]),
+  skuId: z.string().uuid(),
+  sku: z.string(),
+  asin: z.string().nullable().optional(),
+  productTitle: z.string().nullable().optional(),
+  size: z.string().nullable().optional(),
+  locationId: z.string().uuid().optional(),
+  locationCode: z.string().optional(),
+  locationName: z.string().optional(),
+  assignmentVersion: z.coerce.number().int().positive().optional(),
+  quantity: z.number().int().positive().optional(),
+  confirmedAt: z.string().datetime().optional(),
+  message: z.string().optional(),
+}).passthrough();

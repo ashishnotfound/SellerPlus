@@ -1,7 +1,7 @@
 begin;
 
 create extension if not exists pgtap with schema extensions;
-select plan(26);
+select plan(29);
 
 insert into auth.users (
   id, email, encrypted_password, email_confirmed_at,
@@ -322,6 +322,33 @@ select is(
   ),
   false,
   'Authenticated clients cannot bypass the authorized Reyo Pack history API'
+);
+select is(
+  has_function_privilege(
+    'authenticated',
+    'public.lookup_reyo_putaway_product(uuid,uuid,uuid,text)',
+    'EXECUTE'
+  ),
+  false,
+  'Authenticated clients cannot bypass the authorized putaway lookup API'
+);
+select is(
+  has_function_privilege(
+    'authenticated',
+    'public.confirm_reyo_putaway_sku(uuid,uuid,uuid,uuid,uuid,bigint,integer,text,text)',
+    'EXECUTE'
+  ),
+  false,
+  'Authenticated clients cannot bypass the atomic putaway confirmation API'
+);
+select is(
+  has_function_privilege(
+    'authenticated',
+    'public.save_reyo_pack_settings(uuid,uuid,bigint,boolean,boolean,numeric,integer,integer,integer,boolean)',
+    'EXECUTE'
+  ),
+  false,
+  'Authenticated clients cannot bypass Reyo Pack admin settings authorization'
 );
 
 select is(
