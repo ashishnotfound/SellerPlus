@@ -6,12 +6,13 @@
  */
 
 import { NextResponse } from "next/server";
-import { authenticateWithDevFallback } from "@/lib/auth-middleware";
-import { getAdminClient } from "@/lib/auth-middleware";
+import { authenticate, authErrorResponse } from "@/lib/auth-middleware";
+import { publicJobError } from "@/lib/jobs/public-error";
+import { z } from "zod";
 
 export async function GET(req: Request) {
   try {
-    const user = await authenticateWithDevFallback(req);
+    const user = await authenticate(req);
     const { searchParams } = new URL(req.url);
     const jobId = searchParams.get("jobId");
 
@@ -19,8 +20,7 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: "jobId query parameter is required." }, { status: 400 });
     }
 
-    const adminClient = getAdminClient();
-    const { data, error } = await adminClient
+    const { data, error } = await user.supabaseAdmin
       .from("jobs")
       .select("id, status, result, last_error, created_at, started_at, completed_at")
       .eq("id", jobId)
@@ -35,12 +35,16 @@ export async function GET(req: Request) {
       jobId: data.id,
       status: data.status,
       result: data.result ?? null,
-      error: data.last_error ?? null,
+      error: publicJobError(data.status, data.last_error),
       createdAt: data.created_at,
       startedAt: data.started_at,
       completedAt: data.completed_at,
     });
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return NextResponse.json({ error: "Invalid job identifier.", code: "VALIDATION_ERROR" }, { status: 400 });
+    }
+    const response = authErrorResponse(error);
+    return NextResponse.json(response.body, { status: response.status });
   }
 }

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { authenticate, authErrorResponse } from "@/lib/auth-middleware";
+import { publicJobError } from "@/lib/jobs/public-error";
 
 const paramsSchema = z.object({ jobId: z.string().uuid() });
 
@@ -21,7 +22,12 @@ export async function GET(
     if (!data) {
       return NextResponse.json({ error: "Job not found.", code: "NOT_FOUND" }, { status: 404 });
     }
-    return NextResponse.json({ data }, { headers: { "Cache-Control": "no-store" } });
+    return NextResponse.json({
+      data: {
+        ...data,
+        last_error: publicJobError(data.status, data.last_error),
+      },
+    }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json({ error: "Invalid job identifier.", code: "VALIDATION_ERROR" }, { status: 400 });
