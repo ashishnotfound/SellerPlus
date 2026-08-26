@@ -23,13 +23,6 @@ export const config = {
     profitLeakScanPeriod: process.env.WORKER_PROFIT_LEAK_SCAN_PERIOD || "0 * * * *", // Hourly
   },
   
-  notifications: {
-    discordWebhookUrl: process.env.DISCORD_WEBHOOK_URL || "",
-    telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || "",
-    telegramChatId: process.env.TELEGRAM_CHAT_ID || "",
-    resendApiKey: process.env.RESEND_API_KEY || "",
-  },
-  
   amazon: {
     region: process.env.AMAZON_SP_API_REGION || "IN",
     sandbox: process.env.AMAZON_SP_API_SANDBOX === "true",

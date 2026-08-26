@@ -52,7 +52,7 @@ npm run dev
 
 The public Supabase URL and publishable key are required in the browser. Server routes additionally require `SUPABASE_SECRET_KEY` (or the legacy `SUPABASE_SERVICE_ROLE_KEY`). Production authentication fails closed; `SELLERPLUS_ALLOW_INSECURE_DEV_AUTH=true` is development-only and is never accepted in production.
 
-All supported environment variables are documented, without credentials, in [.env.example](.env.example). Amazon and notification credentials may be configured per workspace; they are encrypted at rest and are never returned to browser clients.
+All supported environment variables are documented, without credentials, in [.env.example](.env.example). Amazon and workspace notification credentials are encrypted at rest and are never returned to browser clients. Email delivery uses the optional platform-level `RESEND_API_KEY`; Discord and Telegram destinations are stored per workspace.
 
 ## Database migrations
 
