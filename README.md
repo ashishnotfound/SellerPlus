@@ -75,7 +75,7 @@ git diff --check
 
 The current suite covers authentication boundaries, tenant isolation, Amazon parsing/sync checkpoints, packing/putaway APIs, idempotency, realtime contracts, offline fail-closed behavior, AI budget accounting, and concurrent packing conflict handling. A live Postgres race test and Android camera validation require external infrastructure or hardware.
 
-`npm run lint` currently delegates to `next lint`; the repository does not yet vendor an ESLint CLI/config, so CI should install and configure the chosen ESLint version before treating lint as a release gate.
+`npm run lint` uses the committed ESLint 9 and Next.js configuration. It currently reports non-blocking legacy hook-dependency and image-optimization warnings; those remain visible so they can be removed incrementally rather than being hidden by the build.
 
 ## Deployment
 
