@@ -75,12 +75,14 @@ interface QueueItem {
 }
 
 interface QueueRow {
+  id?: string;
   shipmentId?: string;
   orderId?: string;
   amazonOrderId?: string;
   awb?: string | null;
   trackingNumber?: string | null;
   carrier?: string | null;
+  shippingService?: string | null;
   packingStatus?: string;
   status?: string;
   shipByDate?: string | null;
@@ -90,10 +92,14 @@ interface QueueRow {
   labelAvailable?: boolean;
   unitCount?: number;
   sessionNumber?: number | null;
+  mode?: string;
+  startedAt?: string | null;
+  packages_packed?: number;
+  units_packed?: number;
+  putaway_units?: number;
   createdAt?: string | null;
   updatedAt?: string | null;
   items?: QueueItem[];
-  [key: string]: unknown;
 }
 
 interface PutawayRow {
@@ -228,6 +234,7 @@ function ScanFeedback({ result, onClear, onPack, onViewLabel, busy }: { result: 
         <div><p className="text-[11px] uppercase tracking-wider text-zinc-500">AWB</p><p className="mt-1 font-mono text-white">{result.awb ?? result.barcode ?? "—"}</p></div>
         <div><p className="text-[11px] uppercase tracking-wider text-zinc-500">Status</p><p className={cn("mt-1 inline-flex rounded-md border px-2 py-1 text-xs font-semibold", statusClasses(result.packingStatus))}>{statusLabel(result.packingStatus)}</p></div>
         <div><p className="text-[11px] uppercase tracking-wider text-zinc-500">Ship by</p><p className="mt-1 text-white">{displayDate(result.shipByDate)}</p></div>
+        <div><p className="text-[11px] uppercase tracking-wider text-zinc-500">Shipping method</p><p className="mt-1 text-white">{result.shippingMethod ?? "—"}</p></div>
       </div>
       {result.items && result.items.length > 0 && (
         <div className="mt-5 border-t border-white/10 pt-4">
@@ -260,7 +267,14 @@ function QueueCard({ row, cancelled, onUseAwb }: { row: QueueRow; cancelled?: bo
         {(row.items ?? []).slice(0, 3).map((item, index) => <div key={`${item.sku ?? "item"}-${index}`} className="flex items-center justify-between gap-3 text-sm"><span className="truncate text-zinc-300">{item.title ?? item.sku ?? "Unidentified item"}</span><span className="shrink-0 font-semibold text-white">×{item.quantity ?? 0}</span></div>)}
         {(row.items?.length ?? 0) > 3 && <p className="text-xs text-zinc-500">+{(row.items?.length ?? 0) - 3} more items</p>}
       </div>
-      <div className="mt-4 flex items-center justify-between border-t border-white/10 pt-3 text-xs text-zinc-500"><span>Ship by {displayDate(row.shipByDate)}</span><span>{row.unitCount ?? 0} units</span></div>
+      <div className="mt-4 space-y-2 border-t border-white/10 pt-3 text-xs text-zinc-500">
+        <div className="flex items-center justify-between gap-3"><span>Ship by {displayDate(row.shipByDate)}</span><span>{row.unitCount ?? 0} units</span></div>
+        {(row.carrier || row.trackingNumber || row.shippingService) && <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-zinc-400">
+          {row.carrier && <span>Carrier: <strong className="font-medium text-zinc-200">{row.carrier}</strong></span>}
+          {row.trackingNumber && <span>Tracking: <strong className="font-mono font-medium text-zinc-200">{row.trackingNumber}</strong></span>}
+          {row.shippingService && <span>Service: <strong className="font-medium text-zinc-200">{row.shippingService}</strong></span>}
+        </div>}
+      </div>
       {cancelled ? <p className="mt-3 rounded-lg border border-rose-400/20 bg-rose-400/10 px-3 py-2 text-xs font-semibold text-rose-200">DO NOT PACK · {row.cancellationReason ?? "Cancelled by Amazon"}</p> : row.awb && <button type="button" onClick={() => onUseAwb(row.awb ?? "")} className="mt-3 min-h-11 w-full rounded-xl border border-white/15 bg-white/5 text-sm font-semibold text-white hover:bg-white/10">Use AWB for scan</button>}
     </article>
   );
