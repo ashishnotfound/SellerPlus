@@ -40,8 +40,6 @@ export interface JobHandlerResult {
   summary: string;
   /** List of affected entity identifiers (SKUs, order IDs, etc.) */
   affectedEntities?: string[];
-  /** Estimated AI token cost in USD */
-  estimatedCostUsd?: number;
   /**
    * Durable continuation for asynchronous provider workflows. The processor
    * persists the new payload and releases the lock instead of completing the
@@ -99,7 +97,6 @@ async function handleBiAnalysis(ctx: JobContext): Promise<JobHandlerResult> {
     output: result as unknown as Record<string, unknown>,
     summary: `${mode} complete — ${result.recommendations.length} recommendations generated.`,
     affectedEntities: result.recommendations.map((r) => r.id),
-    estimatedCostUsd: 0.002,
   };
 }
 
@@ -110,7 +107,6 @@ async function handleExecutiveAssistant(ctx: JobContext): Promise<JobHandlerResu
     output: result as unknown as Record<string, unknown>,
     summary: `Executive Report ready — ${result.recommendations.length} strategic actions identified.`,
     affectedEntities: result.recommendations.map((r) => r.id),
-    estimatedCostUsd: 0.003,
   };
 }
 
@@ -120,7 +116,6 @@ async function handleAuditAds(ctx: JobContext): Promise<JobHandlerResult> {
   return {
     output: result as unknown as Record<string, unknown>,
     summary: `Ads Audit complete — ${result.recommendations.length} PPC optimisations found.`,
-    estimatedCostUsd: 0.002,
   };
 }
 
@@ -130,7 +125,6 @@ async function handleCheckInventory(ctx: JobContext): Promise<JobHandlerResult> 
   return {
     output: result as unknown as Record<string, unknown>,
     summary: `Inventory scan complete — ${result.recommendations.length} stock alerts.`,
-    estimatedCostUsd: 0.001,
   };
 }
 
@@ -140,7 +134,6 @@ async function handleGenerateReport(ctx: JobContext): Promise<JobHandlerResult> 
   return {
     output: result as unknown as Record<string, unknown>,
     summary: `Weekly Business Report generated — ${result.widgets.length} dashboard widgets.`,
-    estimatedCostUsd: 0.003,
   };
 }
 
@@ -151,7 +144,6 @@ async function handleCreateListingDraft(ctx: JobContext): Promise<JobHandlerResu
     output: { listingId: result.listingId, title: result.title },
     summary: `Listing draft "${result.title}" created. Review before publishing.`,
     affectedEntities: [result.listingId],
-    estimatedCostUsd: 0.004,
   };
 }
 
@@ -167,7 +159,6 @@ async function handleFindKeywords(ctx: JobContext): Promise<JobHandlerResult> {
   return {
     output: { keywords: result } as unknown as Record<string, unknown>,
     summary: `Keyword analysis complete — generated ${result.length} highly optimized keywords.`,
-    estimatedCostUsd: 0.002,
   };
 }
 
@@ -177,7 +168,6 @@ async function handleDetectLowProfitAsin(ctx: JobContext): Promise<JobHandlerRes
   return {
     output: result as unknown as Record<string, unknown>,
     summary: `Profit leak scan complete — ${result.recommendations.length} ASINs flagged.`,
-    estimatedCostUsd: 0.002,
   };
 }
 
