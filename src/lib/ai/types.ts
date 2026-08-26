@@ -35,6 +35,10 @@ export interface GenerationOptions {
   deadlineAt?: number;
   /** Cancels provider work when the enclosing job loses its execution lease. */
   signal?: AbortSignal;
+  /** Restrict routing to a configured provider when an operator tests a connection. */
+  provider?: string;
+  /** Restrict routing to a configured model when an operator tests a connection. */
+  model?: string;
 }
 
 export interface GenerationResult {

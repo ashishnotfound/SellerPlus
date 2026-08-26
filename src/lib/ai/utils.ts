@@ -343,6 +343,8 @@ export async function routeLLMRequest(
       ) === index,
     )
     .filter((setting) => {
+      if (requestOptions.provider && setting.provider !== requestOptions.provider) return false;
+      if (requestOptions.model && setting.model_name !== requestOptions.model) return false;
       const capabilities = PROVIDER_CAPABILITIES[setting.provider] ?? [];
       return requiredCapabilities.every((capability) => capabilities.includes(capability));
     })
