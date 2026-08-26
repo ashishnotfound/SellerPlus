@@ -1,119 +1,104 @@
-<div align="center">
-  <img src="https://via.placeholder.com/150x150.png?text=SellerPlus" alt="SellerPlus Logo" width="150" height="150" />
-  <h1>SellerPlus OS</h1>
-  <p>The autonomous, AI-driven operating system for modern Amazon Sellers.</p>
+# SellerPlus
 
-  <p>
-    <a href="#features">Features</a> •
-    <a href="#architecture">Architecture</a> •
-    <a href="#tech-stack">Tech Stack</a> •
-    <a href="#getting-started">Getting Started</a> •
-    <a href="#deployment">Deployment</a>
-  </p>
-</div>
+**AI-first seller operating system**
+**Made by ReyoStudio**
 
----
+SellerPlus is a multi-tenant Next.js and Supabase application for Amazon seller operations. It combines source-qualified analytics, controlled AI assistance, durable background jobs, marketplace synchronization, and the Reyo Pack fulfillment workflow in one workspace-bound product.
 
-## 🚀 Overview
+## Product areas
 
-**SellerPlus** is a multi-tenant, enterprise-grade B2B SaaS application designed to centralize and automate Amazon FBA operations. Built for high-volume sellers, it replaces fragmented spreadsheets and legacy software with an intelligent, centralized operating system.
+- **Seller operations:** Amazon orders, listings, inventory, refunds, expenses, goals, analytics, and reports.
+- **AI workspace:** structured generation, tenant memory, reviewable proposals, deterministic validation, server-side spend budgets, and durable job accounting.
+- **Reyo Pack:** mobile-first camera scanning, atomic shipment claims and packing confirmation, sessions, immutable packing events, cancellation handling, secure label delivery, putaway locations, realtime refresh, and safe offline read snapshots.
+- **Administration:** workspace permissions, Amazon sync controls, SKU/barcode mappings, warehouse locations, settings, audit history, and connection health.
 
-By leveraging **autonomous background workers** and an **AI Business Intelligence (BI) Engine**, SellerPlus constantly scans for profit leaks, executes automated advertising adjustments, drafts high-converting listings, and streamlines warehouse operations.
+## Architecture
 
----
+```text
+Browser / PWA
+      │ authenticated same-origin API requests
+      ▼
+Next.js route handlers and workers
+      │ tenant-bound service operations
+      ├── Supabase Auth + SSR session
+      ├── PostgreSQL / RLS / immutable events
+      ├── Supabase Realtime Broadcast (state-change signals)
+      ├── durable jobs and cron claims
+      └── Amazon SP-API (server-side credentials only)
+```
 
-## ✨ Core Features
+PostgreSQL is the source of truth. Browser clients never authoritatively mutate packing, cancellation, location, or synchronization state. Reyo Pack reads bounded pages and revalidates after realtime signals; it does not load an unbounded order history into a device.
 
-### 🧠 AI & Automation
-- **Autonomous BI Engine:** Daily processing of sales and cost data to identify macro trends and anomalies.
-- **Profit Leak Detector:** Scans for high-ACOS campaigns, dead inventory, and margin erosion, automatically generating actionable alerts.
-- **Automation Engine:** Rule-based execution system (e.g., auto-pausing bleeding campaigns, adjusting bids based on ROI goals).
-- **AI Listing Drafter:** Generates SEO-optimized Amazon listings tailored to specific keywords and competitive analysis.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for module boundaries, data flow, security assumptions, and deployment notes.
 
-### 📊 Operations & Analytics
-- **Amazon SP-API Integration:** Syncs orders, financial events (fees, commissions), and FBA inventory seamlessly.
-- **Real-Time Dashboards:** Deep dive into profitability, advertising spend, inventory velocity, and operational KPIs.
-- **Warehouse OS:** First-class modules for picking, packing slip generation, shipping operations, and barcode integration.
-- **Multi-Tenant Workspaces:** Secure tenant isolation via Supabase Row Level Security (RLS) and environment configurations.
+## Requirements
 
----
+- Node.js 20 or newer
+- npm (the committed `package-lock.json` is authoritative)
+- A Supabase project with PostgreSQL, Auth, Realtime, and Storage configured
+- Amazon SP-API credentials and the required seller permissions for the marketplaces you connect
+- Optional AI provider credentials if AI features are enabled
 
-## 🏗 Architecture
+## Local setup
 
-SellerPlus follows a modular, serverless architecture optimized for high scalability:
+```bash
+git clone <repository-url>
+cd sellerplus
+npm ci
+cp .env.example .env.local
+# fill the required values in .env.local
+npm run dev
+```
 
-1. **AI Gateway:** A centralized unified layer for LLM requests with built-in resilience, caching, fallback providers, and structured schemas.
-2. **Background Workers (Cron):** Stateless serverless functions triggered by external cron services to handle heavy lifting asynchronously.
-3. **Repository Layer:** Strongly-typed Data Access Objects (DAOs) interfacing with Supabase to abstract away direct database calls.
-4. **JobService & BI_Jobs:** Asynchronous task queue tracking state for long-running operations like catalog synchronization and historical BI generation.
+The public Supabase URL and publishable key are required in the browser. Server routes additionally require `SUPABASE_SECRET_KEY` (or the legacy `SUPABASE_SERVICE_ROLE_KEY`). Production authentication fails closed; `SELLERPLUS_ALLOW_INSECURE_DEV_AUTH=true` is development-only and is never accepted in production.
 
----
+All supported environment variables are documented, without credentials, in [.env.example](.env.example). Amazon and notification credentials may be configured per workspace; they are encrypted at rest and are never returned to browser clients.
 
-## 🛠 Tech Stack
+## Database migrations
 
-- **Framework:** [Next.js 15](https://nextjs.org/) (App Router)
-- **Language:** TypeScript
-- **Styling:** Tailwind CSS, Radix UI, Framer Motion
-- **Database & Auth:** [Supabase](https://supabase.com/) (PostgreSQL + RLS)
-- **AI Provider:** Google Gemini / unified LLM adapters
-- **Deployment:** Vercel
+Apply the ordered files in `supabase/migrations/` to the target Postgres database. For a direct Postgres connection:
 
----
+```bash
+SUPABASE_DB_CONN='postgres://…' node scripts/run-migrations-direct.js
+```
 
-## 📦 Getting Started
+Review the migration files before applying them to production. The repository includes tenant/RLS and operational-schema checks, but a live migration run requires a configured Supabase/Postgres project; this checkout does not contain production credentials.
 
-### Prerequisites
+## Validation
 
-- Node.js >= 20.x
-- A Supabase project
-- API Keys for Google Gemini (or alternate LLMs)
+```bash
+npm run build                 # Next.js production build + PWA generation
+npm test                      # Vitest behavior suite
+./node_modules/.bin/tsc --noEmit
+git diff --check
+```
 
-### Installation
+The current suite covers authentication boundaries, tenant isolation, Amazon parsing/sync checkpoints, packing/putaway APIs, idempotency, realtime contracts, offline fail-closed behavior, AI budget accounting, and concurrent packing conflict handling. A live Postgres race test and Android camera validation require external infrastructure or hardware.
 
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/ashishnotfound/SellerPlus.git
-   cd SellerPlus
-   ```
+`npm run lint` currently delegates to `next lint`; the repository does not yet vendor an ESLint CLI/config, so CI should install and configure the chosen ESLint version before treating lint as a release gate.
 
-2. **Install dependencies:**
-   ```bash
-   npm install
-   ```
+## Deployment
 
-3. **Configure environment variables:**
-   Create a `.env.local` file and populate it with your Supabase and AI keys:
-   ```env
-   NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
-   NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
-   SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
-   GEMINI_API_KEY=your_gemini_key
-   CRON_SECRET=your_cron_secret
-   ```
+The app is structured for Vercel or an equivalent Node.js deployment:
 
-4. **Run database migrations:**
-   Apply the provided SQL schemas located in `supabase/migrations/` via the Supabase Dashboard SQL Editor or CLI.
+1. Configure all required production variables from `.env.example` in the deployment environment.
+2. Apply migrations before enabling worker traffic.
+3. Configure the two cron routes in `vercel.json` (job runner every minute and Reyo Pack scheduler every five minutes), or invoke equivalent authenticated worker endpoints.
+4. Set `CRON_SECRET` and keep it out of browser-visible variables.
+5. Verify Supabase Realtime private-channel authorization, Storage access for label documents, and Amazon credentials/roles.
+6. Run the production build and a real scan → claim → pack → history workflow with a test shipment before warehouse use.
 
-5. **Start the development server:**
-   ```bash
-   npm run dev
-   ```
+The local build is currently green. A Vercel check on the source repository is not actionable from this checkout because no matching Vercel project is connected to the available account; inspect the deployment environment separately rather than weakening application code to satisfy an unknown remote failure.
 
----
+## Security notes
 
-## 🚀 Deployment
+- Keep SP-API, Ads, Supabase secret/service-role, AI, webhook, cron, and encryption credentials server-side.
+- Use workspace-bound APIs and database constraints; do not trust a workspace ID supplied by the browser.
+- Realtime sends only a low-payload state-change signal. Clients re-read authorized, bounded data.
+- Label documents are streamed through an authenticated route and are not public URLs.
+- Offline mode never queues consequential packing or warehouse mutations in browser storage.
+- Critical corrections append audit/event records instead of silently rewriting operational history.
 
-SellerPlus is pre-configured for seamless deployment to **Vercel**. 
+## Branding
 
-1. Push your code to GitHub.
-2. Import the repository in Vercel.
-3. Add the required Environment Variables in the Vercel dashboard.
-4. Deploy!
-
-*(Note: The repository includes a `.npmrc` file configured to bypass strict peer dependency checks specifically for Next 15 / React 19 compatibility.)*
-
----
-
-<div align="center">
-  <p>Built with ❤️ by Ashish.</p>
-</div>
+SellerPlus is an independent ReyoStudio product. The in-app About section exposes the product name, **Made by ReyoStudio** attribution, version/build metadata, legal links when configured, and connected desktop-worker status.

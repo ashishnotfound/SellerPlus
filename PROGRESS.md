@@ -43,9 +43,19 @@
 ### Phase 6 — Admin Super-Panel & RBAC
 - [x] RBAC roles configuration (Owner, Manager, Employee permissions)
 - [x] Super-Admin overview table for monitoring all user subscriptions & audit logs
-- [x] User impersonation & account suspension tools
+- [x] Server-side account suspension tools; unsafe client-side impersonation removed
 
 ### Phase 7 — Security, Hardening & Launch Readiness
 - [x] Full security audit of client-side key storage (moving remaining key calls to API handlers)
 - [x] Final validation of RLS policies with dual workspace isolation tests
 - [x] Performance caching and viewport compliance checks
+
+### Phase 8 — Reyo Pack fulfillment
+- [x] Tenant-scoped fulfillment schema, constraints, indexes, and immutable event history
+- [x] Resumable Amazon Orders API synchronization with package/tracking/Easy Ship fields where supplied
+- [x] Atomic barcode claim and packing confirmation with idempotency and conflict outcomes
+- [x] Mobile camera scanner, manual/hardware fallback, sound/vibration feedback, and safe offline snapshots
+- [x] Packing sessions, queue/history/cancelled views, secure label streaming, and realtime state signals
+- [x] Putaway mode, versioned SKU/location assignments, movement history, and admin controls
+- [x] Same-origin mutation protection, server-side admin authorization, and legacy warehouse boundary notice
+- [ ] Live Supabase migration execution, Android camera validation, and real Amazon credential/role validation (external setup required)

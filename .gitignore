@@ -12,9 +12,33 @@ yarn-debug.log*
 yarn-error.log*
 
 # Env files (do not commit secrets)
+.env
+.env.*
+!.env.example
 .env.local
 .env.*.local
-.env
+.env.production
+.env.staging
+
+# Credentials and browser state
+*.pem
+*.key
+*.p12
+*.crt
+credentials.json
+secrets.json
+playwright/.auth/
+playwright/.sessions/
+**/browser-profile/
+**/user-data-dir/
+cookies.json
+
+# Local database and service state
+*.db
+*.sqlite
+*.sqlite3
+.supabase/
+.vercel/
 
 # OS files
 .DS_Store
