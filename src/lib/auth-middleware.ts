@@ -154,6 +154,18 @@ async function resolveWorkspace(
     throw new AuthError("You do not have access to this workspace.", 403);
   }
 
+  const { data: workspace, error: workspaceError } = await admin
+    .from("workspaces")
+    .select("status")
+    .eq("id", data.workspace_id)
+    .maybeSingle();
+  if (workspaceError) {
+    throw new AuthError("Unable to verify workspace status.", 503);
+  }
+  if (workspace?.status !== "active") {
+    throw new AuthError("This workspace is not available.", 403);
+  }
+
   return { workspaceId: data.workspace_id, workspaceRole: data.role };
 }
 
