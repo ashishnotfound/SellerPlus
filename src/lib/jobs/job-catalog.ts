@@ -11,6 +11,7 @@ export type JobType =
   | "amazon_ads_sync"
   | "amazon_listings_sync"
   | "amazon_orders_sync"
+  | "reyo_pack_amazon_sync"
   | "amazon_refunds_sync"
   | "apply_cost_change";
 
@@ -26,6 +27,7 @@ export const JOB_CATALOG: Record<JobType, { name: string }> = {
   amazon_ads_sync: { name: "Amazon Ads Sync" },
   amazon_listings_sync: { name: "Amazon Listings Sync" },
   amazon_orders_sync: { name: "Amazon Orders & Inventory Sync" },
+  reyo_pack_amazon_sync: { name: "Reyo Pack Amazon Fulfillment Sync" },
   amazon_refunds_sync: { name: "Amazon Refunds Sync" },
   apply_cost_change: { name: "Apply Approved Cost Change" },
 };

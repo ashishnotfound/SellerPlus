@@ -50,6 +50,15 @@ const AMAZON_TO_INTERNAL: Record<string, InternalOrderStatus> = {
   "Canceled": "cancelled",
   "Unfulfillable": "unfulfillable",
 
+  // Orders API v2026-01-01 source values
+  "PENDING": "pending",
+  "PENDING_AVAILABILITY": "pending",
+  "UNSHIPPED": "processing",
+  "PARTIALLY_SHIPPED": "processing",
+  "SHIPPED": "shipped",
+  "CANCELLED": "cancelled",
+  "UNFULFILLABLE": "unfulfillable",
+
   // Legacy/alternative casing encountered in sandbox responses
   "pending": "pending",
   "shipped": "shipped",

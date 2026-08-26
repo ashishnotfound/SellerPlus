@@ -15,6 +15,10 @@ export const permissions = [
   "approval.decide",
   "team.manage",
   "settings.manage",
+  "reyo_pack.read",
+  "reyo_pack.pack",
+  "reyo_pack.putaway",
+  "reyo_pack.admin",
 ] as const;
 
 export type Permission = (typeof permissions)[number];
@@ -35,6 +39,7 @@ const viewer: readonly Permission[] = [
   "advertising.read",
   "finance.read",
   "automation.read",
+  "reyo_pack.read",
 ];
 
 const member: readonly Permission[] = [
@@ -42,6 +47,8 @@ const member: readonly Permission[] = [
   "catalog.write",
   "order.manage",
   "inventory.manage",
+  "reyo_pack.pack",
+  "reyo_pack.putaway",
 ];
 
 const admin: readonly Permission[] = [
@@ -53,6 +60,7 @@ const admin: readonly Permission[] = [
   "approval.decide",
   "team.manage",
   "settings.manage",
+  "reyo_pack.admin",
 ];
 
 export const rolePermissions: Record<WorkspaceRole, readonly Permission[]> = {
@@ -66,6 +74,7 @@ export const rolePermissions: Record<WorkspaceRole, readonly Permission[]> = {
     "catalog.write",
     "listing.publish",
     "inventory.read",
+    "reyo_pack.read",
   ],
   operations: [
     "catalog.read",
@@ -74,6 +83,9 @@ export const rolePermissions: Record<WorkspaceRole, readonly Permission[]> = {
     "inventory.read",
     "inventory.manage",
     "automation.read",
+    "reyo_pack.read",
+    "reyo_pack.pack",
+    "reyo_pack.putaway",
   ],
   finance: ["order.read", "advertising.read", "finance.read", "finance.manage", "automation.read", "approval.decide"],
 };

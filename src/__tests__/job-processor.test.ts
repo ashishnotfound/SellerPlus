@@ -287,6 +287,40 @@ describe("Job Processor Route", () => {
     expect(json.results[0].status).toBe("failed");
   });
 
+  it("atomically marks a Reyo Pack sync failed after retry exhaustion", async () => {
+    const mockHandler = vi.fn().mockRejectedValue(new Error("Amazon remains unavailable"));
+    (getJobEntry as any).mockReturnValue({ handler: mockHandler });
+    mockSupabase.rpc
+      .mockResolvedValueOnce({
+        data: [{
+          id: "reyo-sync-job",
+          job_type: "reyo_pack_amazon_sync",
+          user_id: "user-1",
+          workspace_id: "workspace-1",
+          payload: { syncRunId: "c0a80101-0000-4000-8000-000000000001" },
+          attempts: 7,
+          max_attempts: 8,
+        }],
+        error: null,
+      })
+      .mockResolvedValueOnce({ data: null, error: null });
+
+    const response = await GET(new Request("http://localhost/api/workers/job-processor"));
+    const json = await response.json();
+
+    expect(mockSupabase.rpc).toHaveBeenNthCalledWith(2, "fail_reyo_pack_sync", {
+      p_workspace_id: "workspace-1",
+      p_sync_run_id: "c0a80101-0000-4000-8000-000000000001",
+      p_error_code: "JOB_RETRIES_EXHAUSTED",
+      p_error_message: "Amazon remains unavailable",
+    });
+    expect(json.results).toEqual([{
+      jobId: "reyo-sync-job",
+      status: "failed",
+      jobType: "reyo_pack_amazon_sync",
+    }]);
+  });
+
   it("releases a timed-out job while time remains to persist retry state", async () => {
     vi.useFakeTimers();
     try {

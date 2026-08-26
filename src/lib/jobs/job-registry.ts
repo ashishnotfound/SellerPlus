@@ -196,6 +196,11 @@ async function handleAmazonOrdersSync(ctx: JobContext): Promise<JobHandlerResult
   return runAmazonOrdersSync(ctx);
 }
 
+async function handleReyoPackAmazonSync(ctx: JobContext): Promise<JobHandlerResult> {
+  const { runReyoPackAmazonSync } = await import("@/lib/amazon/reyo-pack-sync");
+  return runReyoPackAmazonSync(ctx);
+}
+
 async function handleAmazonRefundsSync(ctx: JobContext): Promise<JobHandlerResult> {
   const { runAmazonRefundsSync } = await import("@/lib/amazon/refunds-sync");
   return runAmazonRefundsSync(ctx);
@@ -309,6 +314,14 @@ export const JOB_REGISTRY: Record<JobType, JobRegistryEntry> = {
     retryPolicy: { maxAttempts: 8, strategy: "exponential" },
     capabilities: ["inventory", "reporting"],
     notificationTitle: "Amazon Orders Sync Complete",
+  },
+  reyo_pack_amazon_sync: {
+    name: "Reyo Pack Amazon Fulfillment Sync",
+    handler: handleReyoPackAmazonSync,
+    priority: 1,
+    retryPolicy: { maxAttempts: 8, strategy: "exponential" },
+    capabilities: ["inventory", "reporting"],
+    notificationTitle: "Reyo Pack Amazon Sync Complete",
   },
   amazon_refunds_sync: {
     name: "Amazon Refunds Sync",

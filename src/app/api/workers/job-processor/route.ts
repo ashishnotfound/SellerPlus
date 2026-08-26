@@ -229,6 +229,27 @@ export async function GET(request: Request): Promise<NextResponse> {
           .eq("id", jobId)
           .eq("workspace_id", job.workspace_id);
 
+        if (jobType === "reyo_pack_amazon_sync" && !shouldRetry) {
+          const syncRunId = job.payload && typeof job.payload === "object"
+            ? (job.payload as Record<string, unknown>).syncRunId
+            : null;
+          if (typeof syncRunId === "string") {
+            const { error: syncFailureError } = await adminClient.rpc("fail_reyo_pack_sync", {
+              p_workspace_id: job.workspace_id,
+              p_sync_run_id: syncRunId,
+              p_error_code: "JOB_RETRIES_EXHAUSTED",
+              p_error_message: errorMessage.slice(0, 1_000),
+            });
+            if (syncFailureError) {
+              log.error("[JobProcessor] Failed to persist terminal Reyo Pack sync state", undefined, {
+                jobId,
+                syncRunId,
+                error: syncFailureError.message,
+              });
+            }
+          }
+        }
+
         results.push({ jobId, status: shouldRetry ? "requeued" : "failed", jobType });
       }
     }

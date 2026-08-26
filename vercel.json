@@ -1,0 +1,13 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "crons": [
+    {
+      "path": "/api/cron/job-runner",
+      "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/workers/reyo-pack-scheduler",
+      "schedule": "*/5 * * * *"
+    }
+  ]
+}
