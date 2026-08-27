@@ -16,6 +16,14 @@ const serverSupabaseSchema = publicSupabaseSchema.extend({
   secretKey: z.string().min(20),
 });
 
+// Publishable Supabase configuration is intentionally safe to ship to the
+// browser. Environment variables still take precedence for other deployments;
+// these values make the connected Sellerboard project usable on a direct
+// Vercel deployment when its public env vars have not been provisioned yet.
+const CONNECTED_SUPABASE_URL = "https://ztrtlmgbyvyspyxitvkl.supabase.co";
+const CONNECTED_SUPABASE_PUBLISHABLE_KEY =
+  "sb_publishable_SGEvKxlyrHUbIK6SotvfXw_JpTzPj5g";
+
 export type PublicSupabaseConfig = z.infer<typeof publicSupabaseSchema>;
 export type ServerSupabaseConfig = z.infer<typeof serverSupabaseSchema>;
 
@@ -33,10 +41,11 @@ function formatIssues(scope: string, error: z.ZodError): ConfigurationError {
  */
 export function getPublicSupabaseConfig(): PublicSupabaseConfig {
   const result = publicSupabaseSchema.safeParse({
-    url: process.env.NEXT_PUBLIC_SUPABASE_URL,
+    url: process.env.NEXT_PUBLIC_SUPABASE_URL ?? CONNECTED_SUPABASE_URL,
     publishableKey:
       process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ??
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??
+      CONNECTED_SUPABASE_PUBLISHABLE_KEY,
   });
 
   if (!result.success) {
@@ -69,4 +78,3 @@ export function isExplicitInsecureDevMode(): boolean {
     process.env.SELLERPLUS_ALLOW_INSECURE_DEV_AUTH === "true"
   );
 }
-
